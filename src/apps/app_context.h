@@ -14,6 +14,10 @@ enum class AppId : uint8_t {
   Settings = 1,
   FileExplorer = 2,
   AppMarket = 3,
+  Rf = 4,
+  Nfc = 5,
+  Rfid = 6,
+  Nrf24 = 7,
 };
 
 struct AppContext {

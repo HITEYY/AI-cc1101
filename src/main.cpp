@@ -13,7 +13,11 @@
 #include "apps/app_market_app.h"
 #include "apps/app_context.h"
 #include "apps/file_explorer_app.h"
+#include "apps/nfc_app.h"
+#include "apps/nrf24_app.h"
 #include "apps/openclaw_app.h"
+#include "apps/rf_app.h"
+#include "apps/rfid_app.h"
 #include "apps/settings_app.h"
 #include "core/cc1101_radio.h"
 #include "core/ble_manager.h"
@@ -184,6 +188,10 @@ void runLauncher() {
   items.push_back("Setting");
   items.push_back("File Explorer");
   items.push_back("APPMarket");
+  items.push_back("RF");
+  items.push_back("NFC");
+  items.push_back("RFID");
+  items.push_back("NRF24");
 
   gUi.setStatusLine(buildLauncherStatus());
   const int choice = gUi.menuLoop("Launcher",
@@ -205,6 +213,14 @@ void runLauncher() {
     runFileExplorerApp(gAppContext, runBackgroundTick);
   } else if (choice == 3) {
     runAppMarketApp(gAppContext, runBackgroundTick);
+  } else if (choice == 4) {
+    runRfApp(gAppContext, runBackgroundTick);
+  } else if (choice == 5) {
+    runNfcApp(gAppContext, runBackgroundTick);
+  } else if (choice == 6) {
+    runRfidApp(gAppContext, runBackgroundTick);
+  } else if (choice == 7) {
+    runNrf24App(gAppContext, runBackgroundTick);
   }
 }
 

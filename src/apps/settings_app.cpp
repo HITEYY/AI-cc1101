@@ -178,6 +178,10 @@ String buildBleSubtitle(const AppContext &ctx) {
   const BleStatus bs = ctx.ble->status();
   String subtitle = bs.connected ? "Connected" : "Disconnected";
 
+  if (!bs.profile.isEmpty()) {
+    subtitle += " / " + bs.profile;
+  }
+
   if (!bs.deviceName.isEmpty()) {
     subtitle += " / " + bs.deviceName;
   } else if (!bs.deviceAddress.isEmpty()) {
@@ -185,6 +189,52 @@ String buildBleSubtitle(const AppContext &ctx) {
   }
 
   return subtitle;
+}
+
+String keyboardPreview(const String &input) {
+  if (input.isEmpty()) {
+    return "(empty)";
+  }
+
+  String out;
+  out.reserve(input.length() + 16);
+  for (size_t i = 0; i < input.length(); ++i) {
+    const char c = input[static_cast<unsigned int>(i)];
+    if (c == '\n') {
+      out += "\\n";
+    } else if (c == '\t') {
+      out += "\\t";
+    } else if (c >= 32 && c <= 126) {
+      out += c;
+    } else {
+      out += '.';
+    }
+  }
+
+  constexpr size_t kMaxPreview = 80;
+  if (out.length() > kMaxPreview) {
+    out = out.substring(out.length() - kMaxPreview);
+  }
+  return out;
+}
+
+void showBleKeyboardInput(AppContext &ctx,
+                          const std::function<void()> &backgroundTick) {
+  const BleStatus bs = ctx.ble->status();
+
+  std::vector<String> lines;
+  lines.push_back("Connected: " + String(bs.connected ? "Yes" : "No"));
+  lines.push_back("Profile: " + (bs.profile.isEmpty() ? String("(unknown)") : bs.profile));
+  lines.push_back("HID: " + String(bs.hidDevice ? "Yes" : "No"));
+  lines.push_back("Keyboard: " + String(bs.hidKeyboard ? "Yes" : "No"));
+  lines.push_back("Input:");
+  lines.push_back(keyboardPreview(bs.keyboardText));
+  if (!bs.pairingHint.isEmpty()) {
+    lines.push_back("Pairing:");
+    lines.push_back(bs.pairingHint);
+  }
+
+  ctx.ui->showInfo("BLE Keyboard", lines, backgroundTick, "OK/BACK Exit");
 }
 
 void scanAndConnectBle(AppContext &ctx,
@@ -210,7 +260,18 @@ void scanAndConnectBle(AppContext &ctx,
   for (std::vector<BleDeviceInfo>::const_iterator it = devices.begin();
        it != devices.end();
        ++it) {
-    String item = it->name;
+    String item;
+    if (it->isKeyboard) {
+      item = "[KBD] ";
+    } else if (it->isLikelyAudio) {
+      item = "[AUD] ";
+    } else if (it->isHid) {
+      item = "[HID] ";
+    } else {
+      item = "[BLE] ";
+    }
+
+    item += it->name;
     item += " (";
     item += String(it->rssi);
     item += " dBm)";
@@ -244,7 +305,18 @@ void scanAndConnectBle(AppContext &ctx,
   ctx.config.bleDeviceAddress = device.address;
   ctx.config.bleDeviceName = device.name;
   markDirty(ctx);
-  ctx.ui->showToast("BLE", "Connected and staged", 1400, backgroundTick);
+
+  const BleStatus status = ctx.ble->status();
+  if (status.hidKeyboard) {
+    ctx.ui->showToast("BLE", "Keyboard connected", 1400, backgroundTick);
+  } else if (status.likelyAudio) {
+    ctx.ui->showToast("BLE",
+                      "Connected, but audio stream unsupported",
+                      1800,
+                      backgroundTick);
+  } else {
+    ctx.ui->showToast("BLE", "Connected and staged", 1400, backgroundTick);
+  }
 }
 
 void runBleMenu(AppContext &ctx,
@@ -256,6 +328,8 @@ void runBleMenu(AppContext &ctx,
     menu.push_back("Scan & Connect");
     menu.push_back("Connect Saved");
     menu.push_back("Disconnect");
+    menu.push_back("Keyboard Input View");
+    menu.push_back("Clear Keyboard Input");
     menu.push_back("Edit Device Addr");
     menu.push_back("Edit Device Name");
     menu.push_back(String("Auto Connect: ") +
@@ -269,7 +343,7 @@ void runBleMenu(AppContext &ctx,
                                         backgroundTick,
                                         "OK Select  BACK Exit",
                                         buildBleSubtitle(ctx));
-    if (choice < 0 || choice == 7) {
+    if (choice < 0 || choice == 9) {
       return;
     }
     selected = choice;
@@ -307,6 +381,17 @@ void runBleMenu(AppContext &ctx,
     }
 
     if (choice == 3) {
+      showBleKeyboardInput(ctx, backgroundTick);
+      continue;
+    }
+
+    if (choice == 4) {
+      ctx.ble->clearKeyboardInput();
+      ctx.ui->showToast("BLE", "Keyboard input cleared", 1200, backgroundTick);
+      continue;
+    }
+
+    if (choice == 5) {
       String address = ctx.config.bleDeviceAddress;
       if (ctx.ui->textInput("BLE Address", address, false, backgroundTick)) {
         address.toUpperCase();
@@ -316,7 +401,7 @@ void runBleMenu(AppContext &ctx,
       continue;
     }
 
-    if (choice == 4) {
+    if (choice == 6) {
       String name = ctx.config.bleDeviceName;
       if (ctx.ui->textInput("BLE Name", name, false, backgroundTick)) {
         ctx.config.bleDeviceName = name;
@@ -325,7 +410,7 @@ void runBleMenu(AppContext &ctx,
       continue;
     }
 
-    if (choice == 5) {
+    if (choice == 7) {
       ctx.config.bleAutoConnect = !ctx.config.bleAutoConnect;
       markDirty(ctx);
       ctx.ui->showToast("BLE",
@@ -336,7 +421,7 @@ void runBleMenu(AppContext &ctx,
       continue;
     }
 
-    if (choice == 6) {
+    if (choice == 8) {
       ctx.config.bleDeviceAddress = "";
       ctx.config.bleDeviceName = "";
       ctx.config.bleAutoConnect = false;

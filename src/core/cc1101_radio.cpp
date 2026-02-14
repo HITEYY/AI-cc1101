@@ -5,6 +5,8 @@
 #include <SPI.h>
 #include <TFT_eSPI.h>
 
+#include <cstring>
+
 #include "board_pins.h"
 #include "user_config.h"
 
@@ -24,11 +26,18 @@ constexpr uint8_t TX_POWER_DBM = 12;
 constexpr float RF_MIN_MHZ = 280.0f;
 constexpr float RF_MAX_MHZ = 928.0f;
 constexpr float RF_SAFE_DEFAULT_MHZ = 433.92f;
+constexpr size_t CC1101_MAX_PACKET_BYTES = 61;
+constexpr int CC1101_MAX_RX_TIMEOUT_MS = 60000;
+constexpr int CC1101_RX_POLL_MS = 5;
+constexpr int CC1101_MIN_TX_DELAY_MS = 1;
+constexpr int CC1101_MAX_TX_DELAY_MS = 2000;
+constexpr int CC1101_DEFAULT_TX_DELAY_MS = 25;
 
 constexpr unsigned long CC1101_BOOT_SETTLE_MS = 30UL;
 
 bool gCc1101Ready = false;
 float gCurrentFrequencyMhz = USER_DEFAULT_RF_FREQUENCY_MHZ;
+Cc1101PacketConfig gPacketConfig;
 RCSwitch gRcSwitch;
 
 float clampFrequency(float mhz) {
@@ -52,9 +61,77 @@ void selectAntennaForFrequency(float mhz) {
   }
 }
 
+bool validatePacketConfig(const Cc1101PacketConfig &config, String &errorOut) {
+  if (config.modulation > 4) {
+    errorOut = "modulation must be 0..4";
+    return false;
+  }
+  if (config.dataRateKbps < 0.05f || config.dataRateKbps > 500.0f) {
+    errorOut = "dataRate must be 0.05..500 kbps";
+    return false;
+  }
+  if (config.deviationKHz < 1.0f || config.deviationKHz > 380.0f) {
+    errorOut = "deviation must be 1..380 kHz";
+    return false;
+  }
+  if (config.rxBandwidthKHz < 58.0f || config.rxBandwidthKHz > 812.0f) {
+    errorOut = "rxBW must be 58..812 kHz";
+    return false;
+  }
+  if (config.syncMode > 7) {
+    errorOut = "syncMode must be 0..7";
+    return false;
+  }
+  if (config.packetFormat > 3) {
+    errorOut = "packetFormat must be 0..3";
+    return false;
+  }
+  if (config.lengthConfig > 3) {
+    errorOut = "lengthConfig must be 0..3";
+    return false;
+  }
+  if (config.packetLength == 0) {
+    errorOut = "packetLength must be 1..255";
+    return false;
+  }
+  return true;
+}
+
+void applyPacketConfigNoValidate(const Cc1101PacketConfig &config) {
+  setCc1101FrequencyMhz(gCurrentFrequencyMhz);
+
+  ELECHOUSE_cc1101.setSidle();
+  ELECHOUSE_cc1101.setModulation(config.modulation);
+  ELECHOUSE_cc1101.setChannel(config.channel);
+  ELECHOUSE_cc1101.setDRate(config.dataRateKbps);
+  ELECHOUSE_cc1101.setDeviation(config.deviationKHz);
+  ELECHOUSE_cc1101.setRxBW(config.rxBandwidthKHz);
+  ELECHOUSE_cc1101.setPktFormat(config.packetFormat);
+  ELECHOUSE_cc1101.setCrc(config.crcEnabled);
+  ELECHOUSE_cc1101.setLengthConfig(config.lengthConfig);
+  ELECHOUSE_cc1101.setPacketLength(config.packetLength);
+  ELECHOUSE_cc1101.setWhiteData(config.whitening);
+  ELECHOUSE_cc1101.setManchester(config.manchester);
+  ELECHOUSE_cc1101.setSyncMode(config.syncMode);
+  ELECHOUSE_cc1101.setAppendStatus(true);
+  ELECHOUSE_cc1101.setPA(TX_POWER_DBM);
+  ELECHOUSE_cc1101.SetRx();
+}
+
+int clampTxDelayMs(int txDelayMs) {
+  if (txDelayMs < CC1101_MIN_TX_DELAY_MS) {
+    return CC1101_DEFAULT_TX_DELAY_MS;
+  }
+  if (txDelayMs > CC1101_MAX_TX_DELAY_MS) {
+    return CC1101_MAX_TX_DELAY_MS;
+  }
+  return txDelayMs;
+}
+
 }  // namespace
 
 bool initCc1101Radio() {
+  gPacketConfig = Cc1101PacketConfig{};
   gCurrentFrequencyMhz = clampFrequency(gCurrentFrequencyMhz);
 
   pinMode(PIN_POWER_ON, OUTPUT);
@@ -90,12 +167,9 @@ bool initCc1101Radio() {
     return false;
   }
 
-  ELECHOUSE_cc1101.setModulation(2);  // ASK/OOK
-  ELECHOUSE_cc1101.setPA(TX_POWER_DBM);
-  ELECHOUSE_cc1101.setRxBW(256);
-
   selectAntennaForFrequency(gCurrentFrequencyMhz);
   ELECHOUSE_cc1101.setMHZ(gCurrentFrequencyMhz);
+  applyPacketConfigNoValidate(gPacketConfig);
 
   pinMode(CC1101_GDO0_PIN, OUTPUT);
   ELECHOUSE_cc1101.SetTx();
@@ -122,6 +196,130 @@ void setCc1101FrequencyMhz(float mhz) {
   }
   selectAntennaForFrequency(gCurrentFrequencyMhz);
   ELECHOUSE_cc1101.setMHZ(gCurrentFrequencyMhz);
+}
+
+const Cc1101PacketConfig &getCc1101PacketConfig() {
+  return gPacketConfig;
+}
+
+bool configureCc1101Packet(const Cc1101PacketConfig &config, String &errorOut) {
+  if (!gCc1101Ready) {
+    errorOut = "CC1101 not initialized";
+    return false;
+  }
+
+  String validateErr;
+  if (!validatePacketConfig(config, validateErr)) {
+    errorOut = validateErr;
+    return false;
+  }
+
+  gPacketConfig = config;
+  applyPacketConfigNoValidate(gPacketConfig);
+  errorOut = "";
+  return true;
+}
+
+int readCc1101RssiDbm(String *errorOut) {
+  if (!gCc1101Ready) {
+    if (errorOut) {
+      *errorOut = "CC1101 not initialized";
+    }
+    return 0;
+  }
+
+  ELECHOUSE_cc1101.SetRx();
+  delay(3);
+  if (errorOut) {
+    *errorOut = "";
+  }
+  return ELECHOUSE_cc1101.getRssi();
+}
+
+bool sendCc1101Packet(const uint8_t *data,
+                      size_t size,
+                      int txDelayMs,
+                      String &errorOut) {
+  if (!gCc1101Ready) {
+    errorOut = "CC1101 not initialized";
+    return false;
+  }
+  if (!data || size == 0) {
+    errorOut = "packet is empty";
+    return false;
+  }
+  if (size > CC1101_MAX_PACKET_BYTES) {
+    errorOut = "packet max size is 61 bytes";
+    return false;
+  }
+
+  uint8_t tx[CC1101_MAX_PACKET_BYTES];
+  memcpy(tx, data, size);
+
+  ELECHOUSE_cc1101.SetTx();
+  ELECHOUSE_cc1101.SendData(tx,
+                            static_cast<byte>(size),
+                            clampTxDelayMs(txDelayMs));
+  ELECHOUSE_cc1101.SetRx();
+  errorOut = "";
+  return true;
+}
+
+bool sendCc1101PacketText(const String &text,
+                          int txDelayMs,
+                          String &errorOut) {
+  if (text.isEmpty()) {
+    errorOut = "text is empty";
+    return false;
+  }
+  if (text.length() > CC1101_MAX_PACKET_BYTES) {
+    errorOut = "text max length is 61";
+    return false;
+  }
+
+  uint8_t tx[CC1101_MAX_PACKET_BYTES];
+  const size_t len = text.length();
+  for (size_t i = 0; i < len; ++i) {
+    tx[i] = static_cast<uint8_t>(text[static_cast<unsigned int>(i)]);
+  }
+  return sendCc1101Packet(tx, len, txDelayMs, errorOut);
+}
+
+bool receiveCc1101Packet(std::vector<uint8_t> &outData,
+                         int timeoutMs,
+                         int *rssiOut,
+                         String &errorOut) {
+  outData.clear();
+
+  if (!gCc1101Ready) {
+    errorOut = "CC1101 not initialized";
+    return false;
+  }
+  if (timeoutMs < 1 || timeoutMs > CC1101_MAX_RX_TIMEOUT_MS) {
+    errorOut = "timeout must be 1..60000 ms";
+    return false;
+  }
+
+  ELECHOUSE_cc1101.SetRx();
+  const unsigned long startedAt = millis();
+  while (millis() - startedAt < static_cast<unsigned long>(timeoutMs)) {
+    if (ELECHOUSE_cc1101.CheckRxFifo(0)) {
+      uint8_t rx[CC1101_MAX_PACKET_BYTES] = {0};
+      const uint8_t rxLen = ELECHOUSE_cc1101.ReceiveData(rx);
+      if (rxLen > 0) {
+        outData.assign(rx, rx + rxLen);
+        if (rssiOut) {
+          *rssiOut = ELECHOUSE_cc1101.getRssi();
+        }
+        errorOut = "";
+        return true;
+      }
+    }
+    delay(CC1101_RX_POLL_MS);
+  }
+
+  errorOut = "RX timeout";
+  return false;
 }
 
 bool transmitCc1101(uint32_t code,
@@ -163,6 +361,8 @@ bool transmitCc1101(uint32_t code,
   gRcSwitch.setPulseLength(pulseLength);
   gRcSwitch.setRepeatTransmit(repeat);
   gRcSwitch.send(code, bits);
+
+  applyPacketConfigNoValidate(gPacketConfig);
   return true;
 }
 
@@ -171,4 +371,13 @@ void appendCc1101Info(JsonObject obj) {
   obj["cc1101Ready"] = gCc1101Ready;
   obj["cc1101Present"] = gCc1101Ready ? ELECHOUSE_cc1101.getCC1101() : false;
   obj["frequencyMhz"] = gCurrentFrequencyMhz;
+  obj["packetModulation"] = gPacketConfig.modulation;
+  obj["packetChannel"] = gPacketConfig.channel;
+  obj["packetDataRateKbps"] = gPacketConfig.dataRateKbps;
+  obj["packetDeviationKHz"] = gPacketConfig.deviationKHz;
+  obj["packetRxBandwidthKHz"] = gPacketConfig.rxBandwidthKHz;
+  obj["packetSyncMode"] = gPacketConfig.syncMode;
+  obj["packetFormat"] = gPacketConfig.packetFormat;
+  obj["packetLengthConfig"] = gPacketConfig.lengthConfig;
+  obj["packetLength"] = gPacketConfig.packetLength;
 }

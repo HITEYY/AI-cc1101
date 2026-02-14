@@ -17,6 +17,19 @@ struct GatewayStatus {
   unsigned long lastConnectOkMs = 0;
 };
 
+struct GatewayInboxMessage {
+  String id;
+  String event;
+  String type;
+  String from;
+  String to;
+  String text;
+  String fileName;
+  String contentType;
+  uint32_t voiceBytes = 0;
+  uint64_t tsMs = 0;
+};
+
 class GatewayClient {
  public:
   using InvokeRequestHandler = std::function<void(const String &invokeId,
@@ -49,6 +62,10 @@ class GatewayClient {
                        const String &nodeId,
                        const char *code,
                        const String &message);
+
+  size_t inboxCount() const;
+  bool inboxMessage(size_t index, GatewayInboxMessage &out) const;
+  void clearInbox();
 
  private:
   struct GatewayEndpoint {
@@ -100,8 +117,19 @@ class GatewayClient {
   String encodeBase64Url(const uint8_t *data, size_t len) const;
   String sha256Hex(const uint8_t *data, size_t len) const;
   String buildDeviceAuthPayload(uint64_t signedAtMs, const String &tokenForSignature) const;
+  bool captureMessageEvent(const String &eventName, JsonObjectConst payload);
+  void pushInboxMessage(const GatewayInboxMessage &message);
+  String readMessageString(JsonObjectConst payload,
+                           const char *key1,
+                           const char *key2 = nullptr,
+                           const char *key3 = nullptr) const;
   bool hasSharedCredential() const;
   uint64_t currentUnixMs() const;
+
+  static constexpr size_t kInboxCapacity = 24;
+  GatewayInboxMessage inbox_[kInboxCapacity];
+  size_t inboxStart_ = 0;
+  size_t inboxCount_ = 0;
 
   String connectNonce_;
   uint64_t connectChallengeTsMs_ = 0;

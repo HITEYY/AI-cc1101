@@ -8,11 +8,16 @@
 
 class NimBLEScan;
 class NimBLEClient;
+class NimBLEAdvertisedDevice;
 
 struct BleDeviceInfo {
   String name;
   String address;
   int rssi = 0;
+  String profile;
+  bool isHid = false;
+  bool isKeyboard = false;
+  bool isLikelyAudio = false;
 };
 
 struct BleStatus {
@@ -22,6 +27,12 @@ struct BleStatus {
   String deviceName;
   String deviceAddress;
   int rssi = 0;
+  String profile;
+  bool hidDevice = false;
+  bool hidKeyboard = false;
+  bool likelyAudio = false;
+  String keyboardText;
+  String pairingHint;
   String lastError;
 };
 
@@ -37,6 +48,8 @@ class BleManager {
                        const String &name = "",
                        String *error = nullptr);
   void disconnectNow();
+  void clearKeyboardInput();
+  String keyboardInputText() const;
 
   bool isConnected() const;
   String lastError() const;
@@ -45,6 +58,16 @@ class BleManager {
  private:
   bool ensureInitialized(String *error = nullptr);
   void setError(const String &message);
+  void analyzeConnectedProfile();
+  bool subscribeKeyboardInput();
+  void handleKeyboardReport(const uint8_t *data, size_t length);
+  char translateKeyboardHidCode(uint8_t keyCode, bool shift) const;
+  bool containsKeyCode(const uint8_t *arr, size_t len, uint8_t code) const;
+  bool detectLikelyAudioByName(const String &name) const;
+  String buildProfileLabel(bool hid, bool keyboard, bool likelyAudio) const;
+  void resetSessionState();
+  bool updateDeviceInfoFromAdvertised(const NimBLEAdvertisedDevice *device,
+                                      BleDeviceInfo &info) const;
 
   RuntimeConfig config_;
   NimBLEScan *scan_ = nullptr;
@@ -57,5 +80,12 @@ class BleManager {
   String connectedName_;
   String connectedAddress_;
   int connectedRssi_ = 0;
+  String connectedProfile_;
+  bool connectedIsHid_ = false;
+  bool connectedIsKeyboard_ = false;
+  bool connectedLikelyAudio_ = false;
+  String keyboardInputBuffer_;
+  String pairingHint_;
+  uint8_t lastKeyboardKeys_[6] = {0, 0, 0, 0, 0, 0};
   String lastError_;
 };

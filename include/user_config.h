@@ -30,6 +30,24 @@
 // CC1101 defaults
 #define USER_DEFAULT_RF_FREQUENCY_MHZ 433.92f
 
+// External module pins (change for your wiring)
+// PN532 NFC (I2C)
+#define USER_NFC_I2C_SDA 8
+#define USER_NFC_I2C_SCL 18
+#define USER_NFC_IRQ_PIN 7
+#define USER_NFC_RESET_PIN 42
+// RC522 RFID (SPI shared with TFT/CC1101)
+#define USER_RFID_SS_PIN 2
+#define USER_RFID_RST_PIN 1
+// nRF24L01 (SPI shared with TFT/CC1101)
+#define USER_NRF24_CE_PIN 17
+#define USER_NRF24_CSN_PIN 14
+#define USER_NRF24_CHANNEL 76
+// 0:250kbps, 1:1Mbps, 2:2Mbps
+#define USER_NRF24_DATA_RATE 1
+// 0:MIN, 1:LOW, 2:HIGH, 3:MAX
+#define USER_NRF24_PA_LEVEL 1
+
 // Telemetry event interval sent via node.event
 #define USER_TELEMETRY_INTERVAL_MS 30000UL
 

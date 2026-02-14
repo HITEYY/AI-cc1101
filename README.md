@@ -4,10 +4,14 @@ LilyGo T-Embed CC1101 보드를 OpenClaw Remote Gateway에 `node`로 연결하�
 
 이 버전은 런타임 앱 구조를 사용합니다.
 
-- `OpenClaw` 앱: 상태 확인 + Gateway 설정 + Save & Apply + Connect/Disconnect/Reconnect
+- `OpenClaw` 앱: 상태 확인 + Gateway 설정 + Messaging(텍스트/음성) + Save & Apply + Connect/Disconnect/Reconnect
 - `Setting` 앱: Wi-Fi 설정 + BLE 스캔/연결/저장(재접속 대상) + System(Factory Reset)
 - `File Explorer` 앱: SD 카드 마운트/용량 확인/디렉토리 탐색/텍스트 미리보기/Quick Format
 - `APPMarket` 앱: GitHub 최신 릴리스 조회/다운로드 + SD 패키지 관리 + 펌웨어 설치/재설치/백업
+- `RF` 앱: CC1101 고급 설정(변조/채널/속도/편이/대역폭/패킷) + 패킷 TX/RX + RSSI + OOK TX
+- `NFC` 앱: PN532(I2C) 모듈 감지 + 태그 UID 스캔
+- `RFID` 앱: RC522(SPI) 모듈 감지 + 카드 UID 스캔
+- `NRF24` 앱: nRF24L01(SPI) 모듈 감지 + 채널/속도/출력 설정 + 텍스트 TX/RX
 
 ## 핵심 기능
 
@@ -20,12 +24,20 @@ LilyGo T-Embed CC1101 보드를 OpenClaw Remote Gateway에 `node`로 연결하�
 - `cc1101.info`
 - `cc1101.set_freq`
 - `cc1101.tx`
+- CC1101 packet mode 설정/송수신/RSSI 측정
+- Messaging event 송신/수신
+  - 텍스트: `msg.text`
+  - 음성 메타: `msg.voice.meta`
+  - 음성 청크: `msg.voice.chunk`
 - 설정 영구 저장(SD: `/oc_cfg.json`, NVS 백업: namespace `oc_cfg`)
 - Bruce 스타일 QWERTY 입력(온디바이스 키보드)
   - 전체 QWERTY 키보드 동시 표시 + `DONE/CAPS/DEL/SPACE/CANCEL`
   - ROT로 키 이동, OK로 입력, BACK으로 취소
 - BLE 장치 스캔/연결
   - 저장 필드: `bleDeviceName`, `bleDeviceAddress`, `bleAutoConnect`
+- BLE HID 키보드 입력 수신
+  - `Setting -> BLE -> Keyboard Input View`에서 입력 확인
+  - `Setting -> BLE -> Clear Keyboard Input`으로 버퍼 초기화
 
 ## 프로젝트 구조
 
@@ -40,6 +52,10 @@ LilyGo T-Embed CC1101 보드를 OpenClaw Remote Gateway에 `node`로 연결하�
 - `src/apps/settings_app.*`: Setting 앱
 - `src/apps/file_explorer_app.*`: File Explorer 앱
 - `src/apps/app_market_app.*`: APPMarket 앱
+- `src/apps/rf_app.*`: RF 앱(CC1101 고급 제어)
+- `src/apps/nfc_app.*`: NFC 앱(PN532)
+- `src/apps/rfid_app.*`: RFID 앱(RC522)
+- `src/apps/nrf24_app.*`: NRF24 앱
 - `src/main.cpp`: 부트스트랩 + 런처 오케스트레이션
 
 ## 빌드/업로드
@@ -69,6 +85,25 @@ pio device monitor -b 115200
 - 선택: `OPENCLAW_GATEWAY_DEVICE_PUBLIC_KEY` (또는 `GATEWAY_DEVICE_PUBLIC_KEY`)
 - 선택: `OPENCLAW_GATEWAY_DEVICE_PRIVATE_KEY` (또는 `GATEWAY_DEVICE_PRIVATE_KEY`)
 
+## 외부 모듈 기본 핀
+
+기본값은 `include/user_config.h`에 있으며, 실제 배선에 맞게 수정하세요.
+
+- PN532 (I2C)
+  - `USER_NFC_I2C_SDA=8`
+  - `USER_NFC_I2C_SCL=18`
+  - `USER_NFC_IRQ_PIN=7`
+  - `USER_NFC_RESET_PIN=42`
+- RC522 (SPI)
+  - `USER_RFID_SS_PIN=2`
+  - `USER_RFID_RST_PIN=1`
+- nRF24L01 (SPI)
+  - `USER_NRF24_CE_PIN=17`
+  - `USER_NRF24_CSN_PIN=14`
+  - `USER_NRF24_CHANNEL=76`
+  - `USER_NRF24_DATA_RATE=1` (0:250kbps, 1:1Mbps, 2:2Mbps)
+  - `USER_NRF24_PA_LEVEL=1` (0:MIN, 1:LOW, 2:HIGH, 3:MAX)
+
 ## 앱 설정 흐름
 
 1. `Setting -> Wi-Fi`
@@ -87,11 +122,18 @@ pio device monitor -b 115200
 - Wi-Fi/Gateway 런타임 반영
 - Gateway 재연결 시도
 
-4. `Setting -> BLE`
+4. `OpenClaw -> Messaging`
+- `Send Text`: 텍스트 메시지 전송
+- `Send Voice (SD)`: SD 오디오 파일(`.wav/.mp3/.m4a/.aac/.opus/.ogg`) 전송
+- `Inbox`: 수신 메시지 확인
+- `Clear Inbox`: 수신함 비우기
+
+5. `Setting -> BLE`
 - `Scan & Connect`, `Connect Saved`, `Disconnect`
+- `Keyboard Input View`, `Clear Keyboard Input`
 - `Edit Device Addr/Name`, `Auto Connect`, `Forget Saved`
 
-5. `Setting -> System -> Factory Reset`
+6. `Setting -> System -> Factory Reset`
 - 2단계 확인 후 SD 설정 파일 + NVS 백업 설정 삭제
 
 ## APPMarket 사용
@@ -115,7 +157,8 @@ pio device monitor -b 115200
 ## BLE 연결 범위
 
 - 이 펌웨어의 BLE 연결은 **BLE GATT 중앙(Central) 연결**입니다.
-- 일반적인 오디오 이어폰/마이크의 A2DP/HFP(클래식 BT 오디오)는 범위 밖입니다.
+- BLE HID 키보드는 입력 수신까지 지원합니다.
+- 이어폰/마이크/스피커는 연결 시도는 가능하지만, 오디오 스트리밍(A2DP/HFP/LE Audio)은 지원하지 않습니다.
 
 ## OpenClaw 테스트
 

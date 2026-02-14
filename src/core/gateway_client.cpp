@@ -168,6 +168,25 @@ bool GatewayClient::sendInvokeError(const String &invokeId,
   return sendRequest("node.invoke.result", params, nullptr);
 }
 
+size_t GatewayClient::inboxCount() const {
+  return inboxCount_;
+}
+
+bool GatewayClient::inboxMessage(size_t index, GatewayInboxMessage &out) const {
+  if (index >= inboxCount_) {
+    return false;
+  }
+
+  const size_t pos = (inboxStart_ + index) % kInboxCapacity;
+  out = inbox_[pos];
+  return true;
+}
+
+void GatewayClient::clearInbox() {
+  inboxStart_ = 0;
+  inboxCount_ = 0;
+}
+
 void GatewayClient::onWsEvent(WStype_t type, uint8_t *payload, size_t length) {
   switch (type) {
     case WStype_DISCONNECTED:
@@ -475,9 +494,10 @@ void GatewayClient::handleGatewayResponse(JsonObjectConst frame) {
 
 void GatewayClient::handleGatewayEvent(JsonObjectConst frame) {
   const String eventName = frame["event"].as<String>();
+  const bool hasPayload = frame["payload"].is<JsonObjectConst>();
 
   if (eventName == "connect.challenge") {
-    if (frame["payload"].is<JsonObjectConst>()) {
+    if (hasPayload) {
       const JsonObjectConst payload = frame["payload"].as<JsonObjectConst>();
       connectNonce_ = String(static_cast<const char *>(payload["nonce"] | ""));
       connectChallengeTsMs_ = payload["ts"] | static_cast<uint64_t>(0);
@@ -486,6 +506,13 @@ void GatewayClient::handleGatewayEvent(JsonObjectConst frame) {
       }
     }
     return;
+  }
+
+  if (hasPayload) {
+    const JsonObjectConst payload = frame["payload"].as<JsonObjectConst>();
+    if (captureMessageEvent(eventName, payload)) {
+      return;
+    }
   }
 
   if (eventName == "shutdown") {
@@ -756,4 +783,153 @@ uint64_t GatewayClient::currentUnixMs() const {
     return 0;
   }
   return static_cast<uint64_t>(nowSec) * 1000ULL;
+}
+
+bool GatewayClient::captureMessageEvent(const String &eventName, JsonObjectConst payload) {
+  const bool isMessageEvent = eventName.startsWith("msg.") ||
+                              eventName.startsWith("message.") ||
+                              eventName.startsWith("chat.");
+  if (!isMessageEvent) {
+    return false;
+  }
+
+  // Raw voice chunks are transport frames, not user-visible inbox entries.
+  if (eventName.endsWith(".chunk")) {
+    return true;
+  }
+
+  GatewayInboxMessage message;
+  message.event = eventName;
+  message.id = readMessageString(payload, "id", "messageId", "msgId");
+  if (message.id.isEmpty()) {
+    message.id = nextReqId("in");
+  }
+
+  message.type = readMessageString(payload, "type", "kind");
+  if (message.type.isEmpty()) {
+    message.type = eventName.indexOf("voice") >= 0 ? "voice" : "text";
+  }
+
+  message.from = readMessageString(payload, "from", "sender", "source");
+  message.to = readMessageString(payload, "to", "target", "recipient");
+  message.text = readMessageString(payload, "text", "message", "body");
+  message.fileName = readMessageString(payload, "fileName", "name", "file");
+  message.contentType = readMessageString(payload, "contentType", "mime", "mimeType");
+
+  auto readUInt32 = [&](const char *key) -> uint32_t {
+    if (!key || !payload.containsKey(key)) {
+      return 0;
+    }
+    const JsonVariantConst value = payload[key];
+    if (value.is<uint32_t>()) {
+      return value.as<uint32_t>();
+    }
+    if (value.is<unsigned long long>()) {
+      return static_cast<uint32_t>(value.as<unsigned long long>());
+    }
+    if (value.is<int>()) {
+      const int asInt = value.as<int>();
+      return asInt > 0 ? static_cast<uint32_t>(asInt) : 0;
+    }
+    if (value.is<const char *>()) {
+      const String asText = String(value.as<const char *>());
+      if (asText.isEmpty()) {
+        return 0;
+      }
+      char *endPtr = nullptr;
+      const unsigned long parsed = strtoul(asText.c_str(), &endPtr, 10);
+      if (endPtr == asText.c_str() || *endPtr != '\0') {
+        return 0;
+      }
+      return static_cast<uint32_t>(parsed);
+    }
+    return 0;
+  };
+
+  message.voiceBytes = readUInt32("size");
+  if (message.voiceBytes == 0) {
+    message.voiceBytes = readUInt32("bytes");
+  }
+
+  uint64_t tsMs = 0;
+  if (payload["ts"].is<uint64_t>()) {
+    tsMs = payload["ts"].as<uint64_t>();
+  } else if (payload["ts"].is<unsigned long long>()) {
+    tsMs = static_cast<uint64_t>(payload["ts"].as<unsigned long long>());
+  } else if (payload["ts"].is<const char *>()) {
+    const String tsText = String(payload["ts"].as<const char *>());
+    if (!tsText.isEmpty()) {
+      char *endPtr = nullptr;
+      const unsigned long long parsed = strtoull(tsText.c_str(), &endPtr, 10);
+      if (endPtr != tsText.c_str() && *endPtr == '\0') {
+        tsMs = static_cast<uint64_t>(parsed);
+      }
+    }
+  }
+  message.tsMs = tsMs > 0 ? tsMs : currentUnixMs();
+
+  pushInboxMessage(message);
+  return true;
+}
+
+void GatewayClient::pushInboxMessage(const GatewayInboxMessage &message) {
+  if (kInboxCapacity == 0) {
+    return;
+  }
+
+  size_t pos = 0;
+  if (inboxCount_ < kInboxCapacity) {
+    pos = (inboxStart_ + inboxCount_) % kInboxCapacity;
+    ++inboxCount_;
+  } else {
+    pos = inboxStart_;
+    inboxStart_ = (inboxStart_ + 1) % kInboxCapacity;
+  }
+
+  inbox_[pos] = message;
+}
+
+String GatewayClient::readMessageString(JsonObjectConst payload,
+                                        const char *key1,
+                                        const char *key2,
+                                        const char *key3) const {
+  auto readOne = [&](const char *key) -> String {
+    if (!key || !payload.containsKey(key)) {
+      return "";
+    }
+
+    JsonVariantConst value = payload[key];
+    if (value.is<const char *>()) {
+      return String(value.as<const char *>());
+    }
+    if (value.is<String>()) {
+      return value.as<String>();
+    }
+    if (value.is<bool>() || value.is<int>() || value.is<long>() ||
+        value.is<unsigned long>() || value.is<long long>() ||
+        value.is<unsigned long long>() || value.is<float>() || value.is<double>()) {
+      return value.as<String>();
+    }
+    if (value.is<JsonObjectConst>()) {
+      JsonObjectConst nested = value.as<JsonObjectConst>();
+      const String nestedId = String(static_cast<const char *>(nested["id"] | ""));
+      if (!nestedId.isEmpty()) {
+        return nestedId;
+      }
+      return String(static_cast<const char *>(nested["name"] | ""));
+    }
+    return "";
+  };
+
+  const String first = readOne(key1);
+  if (!first.isEmpty()) {
+    return first;
+  }
+
+  const String second = readOne(key2);
+  if (!second.isEmpty()) {
+    return second;
+  }
+
+  return readOne(key3);
 }
