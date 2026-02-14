@@ -19,6 +19,7 @@
 #include "core/gateway_client.h"
 #include "core/node_command_handler.h"
 #include "core/runtime_config.h"
+#include "core/tailscale_lite_client.h"
 #include "core/wifi_manager.h"
 #include "ui/ui_shell.h"
 
@@ -28,12 +29,14 @@ UIShell gUi;
 WifiManager gWifi;
 GatewayClient gGateway;
 BleManager gBle;
+TailscaleLiteClient gTailscaleLite;
 NodeCommandHandler gNodeHandler;
 AppContext gAppContext;
 XPowersPPM gPmu;
 
 void runBackgroundTick() {
   gWifi.tick();
+  gTailscaleLite.tick();
   gGateway.tick();
   gBle.tick();
 }
@@ -45,6 +48,8 @@ String buildLauncherStatus() {
   const GatewayStatus gs = gGateway.status();
   line += "GW:";
   line += gs.gatewayReady ? "READY" : (gs.wsConnected ? "WS" : "IDLE");
+  line += " TS:";
+  line += gTailscaleLite.isConnected() ? "UP" : "DOWN";
   line += " BLE:";
   line += gBle.isConnected() ? "CONN" : "IDLE";
 
@@ -149,9 +154,9 @@ void setup() {
   }
   Serial.println(ccReady ? "[boot] cc1101 ready" : "[boot] cc1101 missing");
 
-  bool loadedFromNvs = false;
+  ConfigLoadSource configLoadSource = ConfigLoadSource::Defaults;
   String loadErr;
-  if (!loadConfig(gAppContext.config, &loadedFromNvs, &loadErr)) {
+  if (!loadConfig(gAppContext.config, &configLoadSource, nullptr, &loadErr)) {
     gAppContext.config = makeDefaultConfig();
   }
 
@@ -164,14 +169,24 @@ void setup() {
 
   gBle.begin();
   gBle.configure(gAppContext.config);
+  gTailscaleLite.begin();
+  gTailscaleLite.configure(gAppContext.config);
 
   gNodeHandler.setGatewayClient(&gGateway);
 
   gAppContext.wifi = &gWifi;
   gAppContext.gateway = &gGateway;
   gAppContext.ble = &gBle;
+  gAppContext.tailscaleLite = &gTailscaleLite;
   gAppContext.ui = &gUi;
   gAppContext.configDirty = false;
+
+  if (gAppContext.config.tailscaleLiteEnabled) {
+    String liteErr;
+    if (!gTailscaleLite.connectNow(&liteErr) && !liteErr.isEmpty()) {
+      Serial.println("[boot] tailscale-lite: " + liteErr);
+    }
+  }
 
   if (gAppContext.config.autoConnect &&
       !gAppContext.config.gatewayUrl.isEmpty() &&
@@ -188,7 +203,9 @@ void setup() {
 
   if (!loadErr.isEmpty()) {
     gUi.showToast("Config", loadErr, 1800, runBackgroundTick);
-  } else if (loadedFromNvs) {
+  } else if (configLoadSource == ConfigLoadSource::SdCard) {
+    gUi.showToast("Config", "Loaded from SD", 900, runBackgroundTick);
+  } else if (configLoadSource == ConfigLoadSource::Nvs) {
     gUi.showToast("Config", "Loaded from NVS", 900, runBackgroundTick);
   } else {
     gUi.showToast("Config", "Using default seeds", 900, runBackgroundTick);

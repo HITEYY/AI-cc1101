@@ -17,6 +17,24 @@
 // Default auth mode seed: 0=token, 1=password
 #define USER_GATEWAY_AUTH_MODE 0
 
+// Optional Tailscale relay-login defaults.
+// Used by Tailscale app to call a relay-side API for tailscale login/logout/status.
+#define USER_TAILSCALE_LOGIN_SERVER ""
+#define USER_TAILSCALE_AUTH_KEY ""
+#define USER_TAILSCALE_RELAY_API_HOST ""
+#define USER_TAILSCALE_RELAY_API_PORT 9080
+#define USER_TAILSCALE_RELAY_API_BASE_PATH "/api/tailscale"
+#define USER_TAILSCALE_RELAY_API_TOKEN ""
+
+// Optional Relay-less Tailscale Lite defaults (WireGuard direct).
+// Fill these only when using native lite tunnel mode.
+#define USER_TAILSCALE_LITE_ENABLED false
+#define USER_TAILSCALE_LITE_NODE_IP ""
+#define USER_TAILSCALE_LITE_PRIVATE_KEY ""
+#define USER_TAILSCALE_LITE_PEER_HOST ""
+#define USER_TAILSCALE_LITE_PEER_PORT 41641
+#define USER_TAILSCALE_LITE_PEER_PUBLIC_KEY ""
+
 // Node identity shown in OpenClaw.
 #define USER_OPENCLAW_DISPLAY_NAME "T-Embed CC1101"
 #define USER_OPENCLAW_INSTANCE_ID "t-embed-cc1101"

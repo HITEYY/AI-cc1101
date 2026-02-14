@@ -5,6 +5,7 @@
 #include "../core/ble_manager.h"
 #include "../core/gateway_client.h"
 #include "../core/runtime_config.h"
+#include "../core/tailscale_lite_client.h"
 #include "../core/wifi_manager.h"
 #include "../ui/ui_shell.h"
 
@@ -12,6 +13,27 @@ namespace {
 
 void markDirty(AppContext &ctx) {
   ctx.configDirty = true;
+}
+
+void requestWifiReconnect(AppContext &ctx,
+                          const std::function<void()> &backgroundTick,
+                          bool showToast) {
+  ctx.wifi->configure(ctx.config);
+  if (ctx.config.wifiSsid.isEmpty()) {
+    ctx.wifi->disconnect();
+    if (showToast) {
+      ctx.ui->showToast("Wi-Fi", "Wi-Fi disconnected", 1200, backgroundTick);
+    }
+    return;
+  }
+
+  ctx.wifi->connectNow();
+  if (showToast) {
+    ctx.ui->showToast("Wi-Fi",
+                      "Connecting to " + ctx.config.wifiSsid,
+                      1500,
+                      backgroundTick);
+  }
 }
 
 void editHiddenWifi(AppContext &ctx,
@@ -29,7 +51,7 @@ void editHiddenWifi(AppContext &ctx,
   ctx.config.wifiSsid = ssid;
   ctx.config.wifiPassword = password;
   markDirty(ctx);
-  ctx.ui->showToast("Wi-Fi", "Credentials updated", 1200, backgroundTick);
+  requestWifiReconnect(ctx, backgroundTick, true);
 }
 
 void scanAndSelectWifi(AppContext &ctx,
@@ -73,7 +95,7 @@ void scanAndSelectWifi(AppContext &ctx,
   ctx.config.wifiSsid = selectedSsid;
   ctx.config.wifiPassword = password;
   markDirty(ctx);
-  ctx.ui->showToast("Wi-Fi", "Credentials updated", 1200, backgroundTick);
+  requestWifiReconnect(ctx, backgroundTick, true);
 }
 
 void runWifiMenu(AppContext &ctx,
@@ -84,6 +106,8 @@ void runWifiMenu(AppContext &ctx,
     std::vector<String> menu;
     menu.push_back("Scan Networks");
     menu.push_back("Hidden SSID");
+    menu.push_back("Connect Now");
+    menu.push_back("Disconnect");
     menu.push_back("Clear Wi-Fi");
     menu.push_back("Back");
 
@@ -97,7 +121,7 @@ void runWifiMenu(AppContext &ctx,
                                         backgroundTick,
                                         "OK Select  BACK Exit",
                                         subtitle);
-    if (choice < 0 || choice == 3) {
+    if (choice < 0 || choice == 5) {
       return;
     }
     selected = choice;
@@ -107,10 +131,19 @@ void runWifiMenu(AppContext &ctx,
     } else if (choice == 1) {
       editHiddenWifi(ctx, backgroundTick);
     } else if (choice == 2) {
+      if (ctx.config.wifiSsid.isEmpty()) {
+        ctx.ui->showToast("Wi-Fi", "SSID is empty", 1300, backgroundTick);
+        continue;
+      }
+      requestWifiReconnect(ctx, backgroundTick, true);
+    } else if (choice == 3) {
+      ctx.wifi->disconnect();
+      ctx.ui->showToast("Wi-Fi", "Disconnected", 1200, backgroundTick);
+    } else if (choice == 4) {
       ctx.config.wifiSsid = "";
       ctx.config.wifiPassword = "";
       markDirty(ctx);
-      ctx.ui->showToast("Wi-Fi", "Wi-Fi config cleared", 1200, backgroundTick);
+      requestWifiReconnect(ctx, backgroundTick, true);
     }
   }
 }
@@ -341,6 +374,11 @@ void runSystemMenu(AppContext &ctx,
 
     ctx.ble->disconnectNow();
     ctx.ble->configure(ctx.config);
+
+    if (ctx.tailscaleLite) {
+      ctx.tailscaleLite->disconnectNow();
+      ctx.tailscaleLite->configure(ctx.config);
+    }
 
     ctx.ui->showToast("System", "Factory reset completed", 1600, backgroundTick);
     return;

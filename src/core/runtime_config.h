@@ -19,6 +19,24 @@ struct RuntimeConfig {
   String bleDeviceName;
   String bleDeviceAddress;
   bool bleAutoConnect = false;
+  String tailscaleLoginServer;
+  String tailscaleAuthKey;
+  String tailscaleRelayApiHost;
+  uint16_t tailscaleRelayApiPort = 9080;
+  String tailscaleRelayApiBasePath;
+  String tailscaleRelayApiToken;
+  bool tailscaleLiteEnabled = false;
+  String tailscaleLiteNodeIp;
+  String tailscaleLitePrivateKey;
+  String tailscaleLitePeerHost;
+  uint16_t tailscaleLitePeerPort = 41641;
+  String tailscaleLitePeerPublicKey;
+};
+
+enum class ConfigLoadSource : uint8_t {
+  Defaults = 0,
+  SdCard = 1,
+  Nvs = 2,
 };
 
 RuntimeConfig makeDefaultConfig();
@@ -27,6 +45,7 @@ bool validateConfig(const RuntimeConfig &config, String *error = nullptr);
 bool hasGatewayCredentials(const RuntimeConfig &config);
 
 bool loadConfig(RuntimeConfig &outConfig,
+                ConfigLoadSource *source = nullptr,
                 bool *loadedFromNvs = nullptr,
                 String *error = nullptr);
 bool saveConfig(const RuntimeConfig &config, String *error = nullptr);

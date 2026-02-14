@@ -311,6 +311,134 @@ void runFileMenu(AppContext &ctx,
   }
 }
 
+bool deletePathRecursive(const String &path,
+                         const std::function<void()> &backgroundTick,
+                         String *error) {
+  File node = SD.open(path.c_str(), FILE_READ);
+  if (!node) {
+    if (error) {
+      *error = "Open failed: " + path;
+    }
+    return false;
+  }
+
+  const bool isDir = node.isDirectory();
+  if (!isDir) {
+    node.close();
+    if (!SD.remove(path.c_str())) {
+      if (error) {
+        *error = "Delete failed: " + path;
+      }
+      return false;
+    }
+    if (backgroundTick) {
+      backgroundTick();
+    }
+    return true;
+  }
+
+  std::vector<String> childPaths;
+  File child = node.openNextFile();
+  while (child) {
+    const String childName = String(child.name());
+    if (!childName.isEmpty()) {
+      childPaths.push_back(buildChildPath(path, childName));
+    }
+    child.close();
+    child = node.openNextFile();
+  }
+  node.close();
+
+  for (std::vector<String>::const_iterator it = childPaths.begin();
+       it != childPaths.end();
+       ++it) {
+    if (!deletePathRecursive(*it, backgroundTick, error)) {
+      return false;
+    }
+  }
+
+  if (path != "/") {
+    if (!SD.rmdir(path.c_str())) {
+      if (error) {
+        *error = "Dir remove failed: " + path;
+      }
+      return false;
+    }
+  }
+
+  if (backgroundTick) {
+    backgroundTick();
+  }
+  return true;
+}
+
+bool quickFormatSd(const std::function<void()> &backgroundTick,
+                   String *error) {
+  String mountErr;
+  if (!ensureSdMounted(false, &mountErr)) {
+    if (error) {
+      *error = mountErr;
+    }
+    return false;
+  }
+
+  std::vector<FsEntry> rootEntries;
+  if (!listDirectory("/", rootEntries, error)) {
+    return false;
+  }
+
+  for (std::vector<FsEntry>::const_iterator it = rootEntries.begin();
+       it != rootEntries.end();
+       ++it) {
+    if (!deletePathRecursive(it->fullPath, backgroundTick, error)) {
+      return false;
+    }
+  }
+
+  if (backgroundTick) {
+    backgroundTick();
+  }
+  return true;
+}
+
+void formatSdCard(AppContext &ctx,
+                  const std::function<void()> &backgroundTick) {
+  String err;
+  if (!ensureSdMounted(false, &err)) {
+    ctx.ui->showToast("SD Card",
+                      err.isEmpty() ? String("Mount failed") : err,
+                      1800,
+                      backgroundTick);
+    return;
+  }
+
+  if (!ctx.ui->confirm("Format SD",
+                       "Quick format: delete all files?",
+                       backgroundTick,
+                       "Format",
+                       "Cancel")) {
+    return;
+  }
+
+  if (!ctx.ui->confirm("Confirm Again",
+                       "This cannot be undone",
+                       backgroundTick,
+                       "Format",
+                       "Cancel")) {
+    return;
+  }
+
+  if (!quickFormatSd(backgroundTick, &err)) {
+    ctx.ui->showToast("SD Format",
+                      err.isEmpty() ? String("Format failed") : err,
+                      2000,
+                      backgroundTick);
+    return;
+  }
+
+  ctx.ui->showToast("SD Format", "Quick format completed", 1600, backgroundTick);
+}
+
 void browseSd(AppContext &ctx,
               const std::function<void()> &backgroundTick) {
   String err;
@@ -405,6 +533,7 @@ void runFileExplorerApp(AppContext &ctx,
     std::vector<String> menu;
     menu.push_back("SD Card Info");
     menu.push_back("Browse SD");
+    menu.push_back("Format SD Card");
     menu.push_back("Remount SD");
     menu.push_back("Back");
 
@@ -415,7 +544,7 @@ void runFileExplorerApp(AppContext &ctx,
                                         backgroundTick,
                                         "OK Select  BACK Exit",
                                         subtitle);
-    if (choice < 0 || choice == 3) {
+    if (choice < 0 || choice == 4) {
       return;
     }
 
@@ -426,6 +555,8 @@ void runFileExplorerApp(AppContext &ctx,
     } else if (choice == 1) {
       browseSd(ctx, backgroundTick);
     } else if (choice == 2) {
+      formatSdCard(ctx, backgroundTick);
+    } else if (choice == 3) {
       String err;
       if (ensureSdMounted(true, &err)) {
         ctx.ui->showToast("SD Card", "Mounted", 1200, backgroundTick);

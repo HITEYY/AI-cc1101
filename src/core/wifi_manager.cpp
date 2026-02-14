@@ -6,7 +6,7 @@
 
 namespace {
 
-constexpr unsigned long kConnectRetryMs = 8000UL;
+constexpr unsigned long kConnectRetryMs = 3500UL;
 
 bool containsSsid(const std::vector<String> &list, const String &value) {
   for (std::vector<String>::const_iterator it = list.begin(); it != list.end(); ++it) {
@@ -20,8 +20,10 @@ bool containsSsid(const std::vector<String> &list, const String &value) {
 }  // namespace
 
 void WifiManager::begin() {
+  WiFi.persistent(false);
   WiFi.mode(WIFI_STA);
   WiFi.setAutoReconnect(true);
+  WiFi.setSleep(false);
 }
 
 void WifiManager::configure(const RuntimeConfig &config) {
@@ -32,16 +34,14 @@ void WifiManager::configure(const RuntimeConfig &config) {
   targetPassword_ = config.wifiPassword;
 
   if (targetSsid_.isEmpty()) {
-    if (WiFi.status() == WL_CONNECTED) {
-      WiFi.disconnect(true, false);
-    }
+    WiFi.disconnect(true, false);
     lastConnectAttemptMs_ = 0;
     return;
   }
 
   if (credentialsChanged) {
-    WiFi.disconnect(false, false);
     lastConnectAttemptMs_ = 0;
+    startConnectAttempt(true);
   }
 }
 
@@ -57,10 +57,15 @@ void WifiManager::tick() {
   if (now - lastConnectAttemptMs_ < kConnectRetryMs) {
     return;
   }
-  lastConnectAttemptMs_ = now;
 
-  WiFi.mode(WIFI_STA);
-  WiFi.begin(targetSsid_.c_str(), targetPassword_.c_str());
+  startConnectAttempt(false);
+}
+
+void WifiManager::connectNow() {
+  if (targetSsid_.isEmpty()) {
+    return;
+  }
+  startConnectAttempt(true);
 }
 
 void WifiManager::disconnect() {
@@ -133,4 +138,19 @@ bool WifiManager::scanNetworks(std::vector<String> &outSsids, String *error) {
   }
 
   return true;
+}
+
+void WifiManager::startConnectAttempt(bool disconnectFirst) {
+  if (targetSsid_.isEmpty()) {
+    return;
+  }
+
+  WiFi.mode(WIFI_STA);
+  if (disconnectFirst) {
+    WiFi.disconnect(false, false);
+    delay(40);
+  }
+
+  WiFi.begin(targetSsid_.c_str(), targetPassword_.c_str());
+  lastConnectAttemptMs_ = millis();
 }

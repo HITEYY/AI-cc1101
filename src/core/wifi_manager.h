@@ -11,6 +11,7 @@ class WifiManager {
   void begin();
   void configure(const RuntimeConfig &config);
   void tick();
+  void connectNow();
   void disconnect();
 
   bool isConnected() const;
@@ -25,4 +26,6 @@ class WifiManager {
   String targetSsid_;
   String targetPassword_;
   unsigned long lastConnectAttemptMs_ = 0;
+
+  void startConnectAttempt(bool disconnectFirst);
 };

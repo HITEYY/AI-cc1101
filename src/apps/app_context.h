@@ -7,6 +7,7 @@
 class WifiManager;
 class GatewayClient;
 class BleManager;
+class TailscaleLiteClient;
 class UIShell;
 
 enum class AppId : uint8_t {
@@ -21,6 +22,7 @@ struct AppContext {
   WifiManager *wifi = nullptr;
   GatewayClient *gateway = nullptr;
   BleManager *ble = nullptr;
+  TailscaleLiteClient *tailscaleLite = nullptr;
   UIShell *ui = nullptr;
   bool configDirty = false;
 };
