@@ -177,9 +177,6 @@ class UIShell::Impl {
 
   void drawHeader(const String &title, const String &subtitle) {
     updateHeaderIndicators();
-
-    tft.fillScreen(TFT_BLACK);
-
     tft.fillRect(0, 0, tft.width(), kHeaderHeight, TFT_DARKCYAN);
     tft.setTextColor(TFT_WHITE, TFT_DARKCYAN);
     tft.setCursor(2, 2);
@@ -189,9 +186,11 @@ class UIShell::Impl {
     tft.setCursor(statusX > 2 ? statusX : 2, 2);
     tft.print(headerStatus);
 
+    tft.setTextColor(TFT_WHITE, TFT_DARKCYAN);
     tft.setCursor(4, 12);
     tft.print(title);
 
+    tft.fillRect(0, kHeaderHeight, tft.width(), kRowHeight, TFT_BLACK);
     if (subtitle.length() > 0) {
       tft.setTextColor(TFT_CYAN, TFT_BLACK);
       tft.setCursor(4, kHeaderHeight + 2);
@@ -231,6 +230,14 @@ class UIShell::Impl {
     const int contentTop = subtitle.length() > 0 ? (kHeaderHeight + 16) : (kHeaderHeight + 2);
     const int contentBottom = tft.height() - kFooterHeight - 2;
     const int maxRows = (contentBottom - contentTop) / kRowHeight;
+
+    if (contentBottom >= contentTop) {
+      tft.fillRect(0,
+                   contentTop,
+                   tft.width(),
+                   contentBottom - contentTop + 1,
+                   TFT_BLACK);
+    }
 
     int start = selected - (maxRows / 2);
     if (start < 0) {
@@ -369,14 +376,14 @@ int UIShell::menuLoop(const String &title,
 
   while (true) {
     const unsigned long now = millis();
-    if (!redraw && now - lastRefreshMs >= kHeaderRefreshMs) {
-      redraw = true;
-    }
-
     if (redraw) {
       impl_->drawMenu(title, items, selected, subtitle, footer);
       lastRefreshMs = now;
       redraw = false;
+    } else if (now - lastRefreshMs >= kHeaderRefreshMs) {
+      impl_->drawHeader(title, subtitle);
+      impl_->drawFooter(footer);
+      lastRefreshMs = now;
     }
 
     UiEvent ev = pollInput();
@@ -425,8 +432,9 @@ void UIShell::showInfo(const String &title,
     }
 
     const unsigned long now = millis();
-    if (!redraw && now - lastRefreshMs >= kHeaderRefreshMs) {
-      redraw = true;
+    String footerText = footer;
+    if (total > maxRows) {
+      footerText = "ROT Scroll  " + footer;
     }
 
     if (redraw) {
@@ -446,13 +454,13 @@ void UIShell::showInfo(const String &title,
         impl_->tft.print(lines[static_cast<size_t>(lineIndex)]);
       }
 
-      String footerText = footer;
-      if (total > maxRows) {
-        footerText = "ROT Scroll  " + footer;
-      }
       impl_->drawFooter(footerText);
       lastRefreshMs = now;
       redraw = false;
+    } else if (now - lastRefreshMs >= kHeaderRefreshMs) {
+      impl_->drawHeader(title, "");
+      impl_->drawFooter(footerText);
+      lastRefreshMs = now;
     }
 
     UiEvent ev = pollInput();
@@ -509,52 +517,68 @@ bool UIShell::textInput(const String &title,
   size_t rowIndex = 0;
   int selected = 0;
   bool caps = false;
+  bool redraw = true;
+  unsigned long lastRefreshMs = millis();
 
   while (true) {
-    std::vector<String> entries;
     const String rowNormal = kRowsNormal[rowIndex];
     const String rowShifted = kRowsShifted[rowIndex];
     const int rowCharCount = static_cast<int>(rowNormal.length());
+    const int entryCount = rowCharCount + 5;
 
-    for (int i = 0; i < rowCharCount; ++i) {
-      const char c = caps ? rowShifted[static_cast<unsigned int>(i)]
-                          : rowNormal[static_cast<unsigned int>(i)];
-      entries.push_back(String(c));
-    }
-
-    entries.push_back("DONE");
-    entries.push_back(caps ? "CAPS:ON" : "CAPS:OFF");
-    entries.push_back("DEL");
-    entries.push_back("SPACE");
-    entries.push_back("CANCEL");
-
-    selected = wrapIndex(selected, static_cast<int>(entries.size()));
+    selected = wrapIndex(selected, entryCount);
 
     String preview = "[row ";
     preview += String(static_cast<int>(rowIndex + 1));
     preview += "/4] ";
     preview += maskIfNeeded(working, mask);
 
-    impl_->drawMenu(title,
-                    entries,
-                    selected,
-                    preview,
-                    "BACK: Row  OK:Select");
+    const unsigned long now = millis();
+    if (redraw) {
+      std::vector<String> entries;
+      entries.reserve(static_cast<size_t>(entryCount));
+      for (int i = 0; i < rowCharCount; ++i) {
+        const char c = caps ? rowShifted[static_cast<unsigned int>(i)]
+                            : rowNormal[static_cast<unsigned int>(i)];
+        entries.push_back(String(c));
+      }
+
+      entries.push_back("DONE");
+      entries.push_back(caps ? "CAPS:ON" : "CAPS:OFF");
+      entries.push_back("DEL");
+      entries.push_back("SPACE");
+      entries.push_back("CANCEL");
+
+      impl_->drawMenu(title,
+                      entries,
+                      selected,
+                      preview,
+                      "BACK: Row  OK:Select");
+      lastRefreshMs = now;
+      redraw = false;
+    } else if (now - lastRefreshMs >= kHeaderRefreshMs) {
+      impl_->drawHeader(title, preview);
+      impl_->drawFooter("BACK: Row  OK:Select");
+      lastRefreshMs = now;
+    }
 
     UiEvent ev = pollInput();
     if (ev.delta != 0) {
       selected = wrapIndex(selected + (ev.delta > 0 ? 1 : -1),
-                           static_cast<int>(entries.size()));
+                           entryCount);
+      redraw = true;
     }
 
     if (ev.back) {
       rowIndex = (rowIndex + 1) % 4;
       selected = 0;
+      redraw = true;
     } else if (ev.ok) {
       if (selected < rowCharCount) {
         const char c = caps ? rowShifted[static_cast<unsigned int>(selected)]
                             : rowNormal[static_cast<unsigned int>(selected)];
         working += c;
+        redraw = true;
       } else {
         const int action = selected - rowCharCount;
         if (action == 0) {  // DONE
@@ -562,12 +586,15 @@ bool UIShell::textInput(const String &title,
           return true;
         } else if (action == 1) {  // CAPS
           caps = !caps;
+          redraw = true;
         } else if (action == 2) {  // DEL
           if (working.length() > 0) {
             working.remove(working.length() - 1);
           }
+          redraw = true;
         } else if (action == 3) {  // SPACE
           working += " ";
+          redraw = true;
         } else if (action == 4) {  // CANCEL
           return false;
         }
@@ -587,6 +614,15 @@ void UIShell::showToast(const String &title,
                         const std::function<void()> &backgroundTick) {
   auto drawToastFrame = [&]() {
     impl_->drawHeader(title, "");
+    const int contentTop = kHeaderHeight + 2;
+    const int contentBottom = impl_->tft.height() - kFooterHeight - 2;
+    if (contentBottom >= contentTop) {
+      impl_->tft.fillRect(0,
+                          contentTop,
+                          impl_->tft.width(),
+                          contentBottom - contentTop + 1,
+                          TFT_BLACK);
+    }
     impl_->tft.setTextColor(TFT_WHITE, TFT_BLACK);
     impl_->tft.setCursor(4, kHeaderHeight + 8);
     impl_->tft.print(message);
