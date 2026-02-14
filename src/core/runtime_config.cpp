@@ -17,9 +17,23 @@ constexpr const char *kConfigBlobKey = "cfg_blob";
 constexpr uint32_t kConfigVersion = 2;
 constexpr const char *kSdConfigPath = "/oc_cfg.json";
 constexpr const char *kSdConfigTempPath = "/oc_cfg.tmp";
+constexpr const char *kSdEnvPath = "/.env";
 constexpr uint32_t kSdSpiFrequencyHz = 25000000UL;
 
 void fromJson(const JsonObjectConst &obj, RuntimeConfig &config);
+bool mountSd(String *reason);
+
+struct EnvGatewayOverrides {
+  bool hasGatewayUrl = false;
+  bool hasGatewayToken = false;
+  bool hasGatewayPassword = false;
+  bool hasGatewayAuthMode = false;
+
+  String gatewayUrl;
+  String gatewayToken;
+  String gatewayPassword;
+  GatewayAuthMode gatewayAuthMode = GatewayAuthMode::Token;
+};
 
 bool isPlaceholder(const char *value) {
   if (!value || !value[0]) {
@@ -32,7 +46,185 @@ bool startsWithWsScheme(const String &url) {
   return url.startsWith("ws://") || url.startsWith("wss://");
 }
 
-bool mountSd(String *reason = nullptr) {
+void appendMessage(String &target, const String &message) {
+  if (message.isEmpty()) {
+    return;
+  }
+  if (!target.isEmpty()) {
+    target += "; ";
+  }
+  target += message;
+}
+
+String trimAndUnquote(String value) {
+  value.trim();
+  if (value.length() >= 2) {
+    const char first = value[0];
+    const char last = value[value.length() - 1];
+    if ((first == '"' && last == '"') || (first == '\'' && last == '\'')) {
+      value = value.substring(1, value.length() - 1);
+    }
+  }
+  value.trim();
+  return value;
+}
+
+bool parseGatewayAuthModeValue(const String &raw, GatewayAuthMode &mode) {
+  String normalized = raw;
+  normalized.trim();
+  normalized.toLowerCase();
+
+  if (normalized == "token" || normalized == "0") {
+    mode = GatewayAuthMode::Token;
+    return true;
+  }
+  if (normalized == "password" || normalized == "1") {
+    mode = GatewayAuthMode::Password;
+    return true;
+  }
+  return false;
+}
+
+bool applyEnvGatewayKey(const String &key,
+                        const String &value,
+                        EnvGatewayOverrides &overrides) {
+  if (key == "OPENCLAW_GATEWAY_URL" || key == "GATEWAY_URL") {
+    overrides.hasGatewayUrl = true;
+    overrides.gatewayUrl = value;
+    return true;
+  }
+  if (key == "OPENCLAW_GATEWAY_TOKEN" || key == "GATEWAY_TOKEN") {
+    overrides.hasGatewayToken = true;
+    overrides.gatewayToken = value;
+    return true;
+  }
+  if (key == "OPENCLAW_GATEWAY_PASSWORD" || key == "GATEWAY_PASSWORD") {
+    overrides.hasGatewayPassword = true;
+    overrides.gatewayPassword = value;
+    return true;
+  }
+  if (key == "OPENCLAW_GATEWAY_AUTH_MODE" || key == "GATEWAY_AUTH_MODE") {
+    GatewayAuthMode mode = GatewayAuthMode::Token;
+    if (parseGatewayAuthModeValue(value, mode)) {
+      overrides.hasGatewayAuthMode = true;
+      overrides.gatewayAuthMode = mode;
+    }
+    return true;
+  }
+  return false;
+}
+
+void parseEnvGatewayOverrides(const String &blob, EnvGatewayOverrides &out) {
+  int start = 0;
+  while (start <= static_cast<int>(blob.length())) {
+    int lineEnd = blob.indexOf('\n', static_cast<unsigned int>(start));
+    if (lineEnd < 0) {
+      lineEnd = static_cast<int>(blob.length());
+    }
+
+    String line = blob.substring(static_cast<unsigned int>(start),
+                                 static_cast<unsigned int>(lineEnd));
+    start = lineEnd + 1;
+
+    line.trim();
+    if (line.isEmpty() || line.startsWith("#")) {
+      continue;
+    }
+
+    if (line.startsWith("export ")) {
+      line = line.substring(7);
+      line.trim();
+    }
+
+    const int eq = line.indexOf('=');
+    if (eq <= 0) {
+      continue;
+    }
+
+    String key = line.substring(0, static_cast<unsigned int>(eq));
+    key.trim();
+    if (key.isEmpty()) {
+      continue;
+    }
+
+    String value = line.substring(static_cast<unsigned int>(eq + 1));
+    value = trimAndUnquote(value);
+    applyEnvGatewayKey(key, value, out);
+  }
+}
+
+bool readEnvGatewayOverridesFromSd(EnvGatewayOverrides &overrides,
+                                   bool &found,
+                                   String *error = nullptr) {
+  found = false;
+
+  String mountErr;
+  if (!mountSd(&mountErr)) {
+    return true;
+  }
+
+  if (!SD.exists(kSdEnvPath)) {
+    return true;
+  }
+
+  File file = SD.open(kSdEnvPath, FILE_READ);
+  if (!file || file.isDirectory()) {
+    if (file) {
+      file.close();
+    }
+    if (error) {
+      *error = ".env open failed";
+    }
+    return false;
+  }
+
+  const String blob = file.readString();
+  file.close();
+
+  found = true;
+  if (blob.isEmpty()) {
+    return true;
+  }
+
+  parseEnvGatewayOverrides(blob, overrides);
+  return true;
+}
+
+void applyEnvGatewayOverrides(RuntimeConfig &config,
+                              const EnvGatewayOverrides &overrides) {
+  if (overrides.hasGatewayUrl) {
+    config.gatewayUrl = overrides.gatewayUrl;
+  }
+  if (overrides.hasGatewayToken) {
+    config.gatewayToken = overrides.gatewayToken;
+  }
+  if (overrides.hasGatewayPassword) {
+    config.gatewayPassword = overrides.gatewayPassword;
+  }
+
+  if (overrides.hasGatewayAuthMode) {
+    config.gatewayAuthMode = overrides.gatewayAuthMode;
+    return;
+  }
+
+  if (overrides.hasGatewayToken && !overrides.hasGatewayPassword) {
+    config.gatewayAuthMode = GatewayAuthMode::Token;
+  } else if (!overrides.hasGatewayToken && overrides.hasGatewayPassword) {
+    config.gatewayAuthMode = GatewayAuthMode::Password;
+  } else if (overrides.hasGatewayToken && overrides.hasGatewayPassword) {
+    if (!config.gatewayToken.isEmpty() && config.gatewayPassword.isEmpty()) {
+      config.gatewayAuthMode = GatewayAuthMode::Token;
+    } else if (config.gatewayToken.isEmpty() && !config.gatewayPassword.isEmpty()) {
+      config.gatewayAuthMode = GatewayAuthMode::Password;
+    }
+  }
+
+  if (config.gatewayToken.isEmpty() && !config.gatewayPassword.isEmpty()) {
+    config.gatewayAuthMode = GatewayAuthMode::Password;
+  }
+}
+
+bool mountSd(String *reason) {
   pinMode(boardpins::kTftCs, OUTPUT);
   digitalWrite(boardpins::kTftCs, HIGH);
   pinMode(boardpins::kCc1101Cs, OUTPUT);
@@ -391,9 +583,7 @@ bool loadConfig(RuntimeConfig &outConfig,
   if (loadedFromNvs) {
     *loadedFromNvs = false;
   }
-  if (error) {
-    error->clear();
-  }
+  String warnings;
 
   RuntimeConfig sdConfig = config;
   bool sdFound = false;
@@ -403,34 +593,46 @@ bool loadConfig(RuntimeConfig &outConfig,
     if (source) {
       *source = ConfigLoadSource::SdCard;
     }
-    return true;
+  } else {
+    RuntimeConfig nvsConfig = config;
+    bool nvsFound = false;
+    String nvsErr;
+    if (readConfigFromNvs(nvsConfig, nvsFound, &nvsErr) && nvsFound) {
+      outConfig = nvsConfig;
+      if (source) {
+        *source = ConfigLoadSource::Nvs;
+      }
+      if (loadedFromNvs) {
+        *loadedFromNvs = true;
+      }
+      if (!sdErr.isEmpty()) {
+        appendMessage(warnings, sdErr + " (using NVS backup)");
+      }
+    } else {
+      appendMessage(warnings, sdErr);
+      appendMessage(warnings, nvsErr);
+    }
   }
 
-  RuntimeConfig nvsConfig = config;
-  bool nvsFound = false;
-  String nvsErr;
-  if (readConfigFromNvs(nvsConfig, nvsFound, &nvsErr) && nvsFound) {
-    outConfig = nvsConfig;
-    if (source) {
-      *source = ConfigLoadSource::Nvs;
+  EnvGatewayOverrides envOverrides;
+  bool envFound = false;
+  String envErr;
+  if (!readEnvGatewayOverridesFromSd(envOverrides, envFound, &envErr)) {
+    appendMessage(warnings, envErr);
+  } else if (envFound) {
+    RuntimeConfig envConfig = outConfig;
+    applyEnvGatewayOverrides(envConfig, envOverrides);
+
+    String envValidateErr;
+    if (validateConfig(envConfig, &envValidateErr)) {
+      outConfig = envConfig;
+    } else {
+      appendMessage(warnings, ".env ignored: " + envValidateErr);
     }
-    if (loadedFromNvs) {
-      *loadedFromNvs = true;
-    }
-    if (error && !sdErr.isEmpty()) {
-      *error = sdErr + " (using NVS backup)";
-    }
-    return true;
   }
 
   if (error) {
-    if (!sdErr.isEmpty() && !nvsErr.isEmpty()) {
-      *error = sdErr + "; " + nvsErr;
-    } else if (!sdErr.isEmpty()) {
-      *error = sdErr;
-    } else if (!nvsErr.isEmpty()) {
-      *error = nvsErr;
-    }
+    *error = warnings;
   }
 
   return true;

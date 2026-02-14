@@ -55,6 +55,13 @@ pio device monitor -b 115200
 - SD 카드(`/oc_cfg.json`) 저장값이 있으면 SD가 최우선입니다.
 - SD 설정이 없거나 손상된 경우 NVS 백업을 사용합니다.
 - SD/NVS 모두 비어있을 때만 `user_config.h` 값이 로드됩니다.
+- SD 루트 `/.env`에 Gateway 값이 있으면 부팅 시 최종값을 덮어씁니다.
+
+`/.env` 지원 키:
+- `OPENCLAW_GATEWAY_URL` (또는 `GATEWAY_URL`)
+- `OPENCLAW_GATEWAY_TOKEN` (또는 `GATEWAY_TOKEN`)
+- `OPENCLAW_GATEWAY_PASSWORD` (또는 `GATEWAY_PASSWORD`)
+- 선택: `OPENCLAW_GATEWAY_AUTH_MODE` (또는 `GATEWAY_AUTH_MODE`, `token|password|0|1`)
 
 ## 앱 설정 흐름
 

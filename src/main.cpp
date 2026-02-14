@@ -36,6 +36,8 @@ XPowersPPM gPmu;
 bool gSleepDetectionArmed = false;
 
 constexpr unsigned long kDeepSleepHoldMs = 3000UL;
+constexpr unsigned long kSleepReleaseDebounceMs = 80UL;
+constexpr unsigned long kSleepReleasePollMs = 5UL;
 
 void enableTopButtonWakeup() {
   const gpio_num_t wakePin = static_cast<gpio_num_t>(boardpins::kEncoderBack);
@@ -45,6 +47,24 @@ void enableTopButtonWakeup() {
   rtc_gpio_pulldown_dis(wakePin);
   esp_sleep_disable_wakeup_source(ESP_SLEEP_WAKEUP_ALL);
   esp_sleep_enable_ext0_wakeup(wakePin, 0);
+}
+
+void waitTopButtonReleased() {
+  unsigned long releasedSince = 0;
+  while (true) {
+    const bool pressed = digitalRead(boardpins::kEncoderBack) == LOW;
+    const unsigned long now = millis();
+
+    if (pressed) {
+      releasedSince = 0;
+    } else if (releasedSince == 0) {
+      releasedSince = now;
+    } else if (now - releasedSince >= kSleepReleaseDebounceMs) {
+      return;
+    }
+
+    delay(kSleepReleasePollMs);
+  }
 }
 
 [[noreturn]] void enterDeepSleepNow() {
@@ -58,6 +78,8 @@ void enableTopButtonWakeup() {
   analogWrite(boardpins::kTftBacklight, 0);
   digitalWrite(boardpins::kTftBacklight, LOW);
 
+  // ext0 wake level is LOW, so arm wake only after the button is released.
+  waitTopButtonReleased();
   enableTopButtonWakeup();
   delay(120);
   Serial.flush();
