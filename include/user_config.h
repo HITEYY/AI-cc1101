@@ -26,9 +26,21 @@
 // Node identity shown in OpenClaw.
 #define USER_OPENCLAW_DISPLAY_NAME "T-Embed CC1101"
 #define USER_OPENCLAW_INSTANCE_ID "t-embed-cc1101"
+// All outgoing chat/file messages are routed to this OpenClaw agent.
+#define USER_OPENCLAW_DEFAULT_AGENT_ID "default"
 
 // CC1101 defaults
 #define USER_DEFAULT_RF_FREQUENCY_MHZ 433.92f
+
+// Voice recording defaults (ADC microphone input)
+// Set to a valid ADC-capable pin to enable MIC recording. Use -1 to disable.
+#define USER_MIC_ADC_PIN -1
+// Recommended range: 4000~22050
+#define USER_MIC_SAMPLE_RATE 8000U
+// Default recording duration for quick voice messages.
+#define USER_MIC_DEFAULT_SECONDS 5U
+// Maximum recording duration accepted by UI.
+#define USER_MIC_MAX_SECONDS 30U
 
 // External module pins (change for your wiring)
 // PN532 NFC (I2C)

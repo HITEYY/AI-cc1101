@@ -4,7 +4,7 @@ LilyGo T-Embed CC1101 보드를 OpenClaw Remote Gateway에 `node`로 연결하�
 
 이 버전은 런타임 앱 구조를 사용합니다.
 
-- `OpenClaw` 앱: 상태 확인 + Gateway 설정 + Messaging(텍스트/음성) + Save & Apply + Connect/Disconnect/Reconnect
+- `OpenClaw` 앱: 상태 확인 + Gateway 설정 + Messenger(채팅/파일/음성) + Save & Apply + Connect/Disconnect/Reconnect
 - `Setting` 앱: Wi-Fi 설정 + BLE 스캔/연결/저장(재접속 대상) + System(Factory Reset)
 - `File Explorer` 앱: SD 카드 마운트/용량 확인/디렉토리 탐색/텍스트 미리보기/Quick Format
 - `APPMarket` 앱: GitHub 최신 릴리스 조회/다운로드 + SD 패키지 관리 + 펌웨어 설치/재설치/백업
@@ -24,11 +24,19 @@ LilyGo T-Embed CC1101 보드를 OpenClaw Remote Gateway에 `node`로 연결하�
 - `cc1101.info`
 - `cc1101.set_freq`
 - `cc1101.tx`
+- `cc1101.read_rssi`
+- `cc1101.packet_get`
+- `cc1101.packet_set`
+- `cc1101.packet_tx_text`
+- `cc1101.packet_rx_once`
 - CC1101 packet mode 설정/송수신/RSSI 측정
 - Messaging event 송신/수신
   - 텍스트: `msg.text`
+  - 파일 메타: `msg.file.meta`
+  - 파일 청크: `msg.file.chunk`
   - 음성 메타: `msg.voice.meta`
   - 음성 청크: `msg.voice.chunk`
+- Messenger 발신 대상 고정: `USER_OPENCLAW_DEFAULT_AGENT_ID` (기본값 `default`)
 - 설정 영구 저장(SD: `/oc_cfg.json`, NVS 백업: namespace `oc_cfg`)
 - Bruce 스타일 QWERTY 입력(온디바이스 키보드)
   - 전체 QWERTY 키보드 동시 표시 + `DONE/CAPS/DEL/SPACE/CANCEL`
@@ -38,6 +46,9 @@ LilyGo T-Embed CC1101 보드를 OpenClaw Remote Gateway에 `node`로 연결하�
 - BLE HID 키보드 입력 수신
   - `Setting -> BLE -> Keyboard Input View`에서 입력 확인
   - `Setting -> BLE -> Clear Keyboard Input`으로 버퍼 초기화
+- MIC(ADC) 직접 녹음 후 음성 메시지 전송
+  - `OpenClaw -> Messenger -> Record Voice (MIC/BLE) -> MIC (Device)`
+  - 녹음된 파일은 SD에 `.wav`로 저장 후 `msg.voice.meta/chunk`로 전송
 
 ## 프로젝트 구조
 
@@ -47,6 +58,7 @@ LilyGo T-Embed CC1101 보드를 OpenClaw Remote Gateway에 `node`로 연결하�
 - `src/core/cc1101_radio.*`: CC1101 제어
 - `src/core/wifi_manager.*`: Wi-Fi 연결/스캔
 - `src/core/ble_manager.*`: BLE 스캔/연결/상태
+- `src/core/audio_recorder.*`: MIC(ADC) WAV 녹음
 - `src/ui/ui_shell.*`: TFT/엔코더 UI 공통
 - `src/apps/openclaw_app.*`: OpenClaw 앱
 - `src/apps/settings_app.*`: Setting 앱
@@ -74,6 +86,8 @@ pio device monitor -b 115200
 - SD 설정이 없거나 손상된 경우 NVS 백업을 사용합니다.
 - SD/NVS 모두 비어있을 때만 `user_config.h` 값이 로드됩니다.
 - SD 루트 `/.env`에 Gateway 값이 있으면 부팅 시 최종값을 덮어씁니다.
+- Messenger 기본 수신자(기본 에이전트)는 `USER_OPENCLAW_DEFAULT_AGENT_ID`로 설정합니다.
+- MIC 녹음 사용 시 `USER_MIC_ADC_PIN`에 ADC 가능한 핀 번호를 설정합니다.
 
 `/.env` 지원 키:
 - `OPENCLAW_GATEWAY_URL` (또는 `GATEWAY_URL`)
@@ -103,6 +117,11 @@ pio device monitor -b 115200
   - `USER_NRF24_CHANNEL=76`
   - `USER_NRF24_DATA_RATE=1` (0:250kbps, 1:1Mbps, 2:2Mbps)
   - `USER_NRF24_PA_LEVEL=1` (0:MIN, 1:LOW, 2:HIGH, 3:MAX)
+- MIC (ADC)
+  - `USER_MIC_ADC_PIN=-1` (`-1`은 비활성, 실제 핀 번호 설정 시 활성)
+  - `USER_MIC_SAMPLE_RATE=8000`
+  - `USER_MIC_DEFAULT_SECONDS=5`
+  - `USER_MIC_MAX_SECONDS=30`
 
 ## 앱 설정 흐름
 
@@ -122,11 +141,15 @@ pio device monitor -b 115200
 - Wi-Fi/Gateway 런타임 반영
 - Gateway 재연결 시도
 
-4. `OpenClaw -> Messaging`
-- `Send Text`: 텍스트 메시지 전송
-- `Send Voice (SD)`: SD 오디오 파일(`.wav/.mp3/.m4a/.aac/.opus/.ogg`) 전송
-- `Inbox`: 수신 메시지 확인
-- `Clear Inbox`: 수신함 비우기
+4. `OpenClaw -> Messenger`
+- `Write Message`: 텍스트 메시지 전송
+- `Send File (SD)`: SD 일반 파일 전송(최대 4MB)
+- `Record Voice (MIC/BLE)`: 음성 소스 선택
+  - `MIC (Device)`: 장치 MIC(ADC)에서 직접 녹음 후 즉시 전송
+  - `BLE Device`: BLE 오디오 스트림은 현재 미지원(안내 메시지 표시)
+- `Send Voice File (SD)`: SD 오디오 파일(`.wav/.mp3/.m4a/.aac/.opus/.ogg`) 전송(최대 2MB)
+- 채팅 로그: 송신/수신 메시지 통합 보기 + 상세 보기 + 로그 삭제
+- 모든 발신(`text/file/voice`)은 `USER_OPENCLAW_DEFAULT_AGENT_ID`로 전송
 
 5. `Setting -> BLE`
 - `Scan & Connect`, `Connect Saved`, `Disconnect`
@@ -169,6 +192,11 @@ openclaw nodes describe --node node-host
 openclaw nodes invoke --node node-host --command cc1101.info --params "{}"
 openclaw nodes invoke --node node-host --command cc1101.set_freq --params '{"mhz":433.92}'
 openclaw nodes invoke --node node-host --command cc1101.tx --params '{"code":"0xABCDEF","bits":24,"pulseLength":350,"protocol":1,"repeat":10}'
+openclaw nodes invoke --node node-host --command cc1101.read_rssi --params "{}"
+openclaw nodes invoke --node node-host --command cc1101.packet_get --params "{}"
+openclaw nodes invoke --node node-host --command cc1101.packet_set --params '{"modulation":2,"channel":0,"dataRateKbps":4.8,"deviationKHz":5,"rxBandwidthKHz":256,"syncMode":2,"packetFormat":0,"crcEnabled":true,"lengthConfig":1,"packetLength":61,"whitening":false,"manchester":false}'
+openclaw nodes invoke --node node-host --command cc1101.packet_tx_text --params '{"text":"hello","txDelayMs":25}'
+openclaw nodes invoke --node node-host --command cc1101.packet_rx_once --params '{"timeoutMs":5000}'
 
 openclaw nodes invoke --node node-host --command system.run --params '{"command":["cc1101.info"]}'
 ```
@@ -180,7 +208,16 @@ openclaw nodes invoke --node node-host --command system.run --params '{"command"
 
 ```toml
 [gateway.nodes]
-allowCommands = ["cc1101.info", "cc1101.set_freq", "cc1101.tx"]
+allowCommands = [
+  "cc1101.info",
+  "cc1101.set_freq",
+  "cc1101.tx",
+  "cc1101.read_rssi",
+  "cc1101.packet_get",
+  "cc1101.packet_set",
+  "cc1101.packet_tx_text",
+  "cc1101.packet_rx_once",
+]
 ```
 
 ## 법적 주의

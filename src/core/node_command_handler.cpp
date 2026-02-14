@@ -1,5 +1,6 @@
 #include "node_command_handler.h"
 
+#include <limits.h>
 #include <WiFi.h>
 
 #include "cc1101_radio.h"
@@ -84,6 +85,54 @@ bool readFloatFromJson(JsonVariantConst v, float &out) {
   return false;
 }
 
+bool readIntFromJson(JsonVariantConst v, int &out) {
+  if (v.is<int>()) {
+    out = v.as<int>();
+    return true;
+  }
+  if (v.is<long>()) {
+    out = static_cast<int>(v.as<long>());
+    return true;
+  }
+  if (v.is<unsigned long>()) {
+    const unsigned long value = v.as<unsigned long>();
+    if (value > static_cast<unsigned long>(INT_MAX)) {
+      return false;
+    }
+    out = static_cast<int>(value);
+    return true;
+  }
+  if (v.is<const char *>()) {
+    return parseIntToken(String(v.as<const char *>()), out);
+  }
+  return false;
+}
+
+bool readBoolFromJson(JsonVariantConst v, bool &out) {
+  if (v.is<bool>()) {
+    out = v.as<bool>();
+    return true;
+  }
+  if (v.is<int>()) {
+    out = v.as<int>() != 0;
+    return true;
+  }
+  if (v.is<const char *>()) {
+    String text = String(v.as<const char *>());
+    text.trim();
+    text.toLowerCase();
+    if (text == "1" || text == "true" || text == "yes" || text == "on") {
+      out = true;
+      return true;
+    }
+    if (text == "0" || text == "false" || text == "no" || text == "off") {
+      out = false;
+      return true;
+    }
+  }
+  return false;
+}
+
 bool readUInt32FromJson(JsonVariantConst v, uint32_t &out) {
   if (v.is<uint32_t>()) {
     out = v.as<uint32_t>();
@@ -122,6 +171,56 @@ bool readUInt64FromJson(JsonVariantConst v, uint64_t &out) {
     return parseUInt64Token(String(v.as<const char *>()), out);
   }
   return false;
+}
+
+void appendPacketConfigPayload(JsonObject obj, const Cc1101PacketConfig &cfg) {
+  obj["modulation"] = cfg.modulation;
+  obj["channel"] = cfg.channel;
+  obj["dataRateKbps"] = cfg.dataRateKbps;
+  obj["deviationKHz"] = cfg.deviationKHz;
+  obj["rxBandwidthKHz"] = cfg.rxBandwidthKHz;
+  obj["syncMode"] = cfg.syncMode;
+  obj["packetFormat"] = cfg.packetFormat;
+  obj["crcEnabled"] = cfg.crcEnabled;
+  obj["lengthConfig"] = cfg.lengthConfig;
+  obj["packetLength"] = cfg.packetLength;
+  obj["whitening"] = cfg.whitening;
+  obj["manchester"] = cfg.manchester;
+}
+
+String bytesToHex(const std::vector<uint8_t> &bytes) {
+  static const char kHex[] = "0123456789ABCDEF";
+  String out;
+  out.reserve(bytes.size() * 2);
+  for (size_t i = 0; i < bytes.size(); ++i) {
+    const uint8_t b = bytes[i];
+    out += kHex[(b >> 4) & 0x0F];
+    out += kHex[b & 0x0F];
+  }
+  return out;
+}
+
+String bytesToAscii(const std::vector<uint8_t> &bytes) {
+  String out;
+  out.reserve(bytes.size());
+  for (size_t i = 0; i < bytes.size(); ++i) {
+    const uint8_t c = bytes[i];
+    out += (c >= 32 && c <= 126) ? static_cast<char>(c) : '.';
+  }
+  return out;
+}
+
+bool isSupportedBin(const String &bin) {
+  return bin == "system.which" ||
+         bin == "system.run" ||
+         bin == "cc1101.info" ||
+         bin == "cc1101.set_freq" ||
+         bin == "cc1101.tx" ||
+         bin == "cc1101.read_rssi" ||
+         bin == "cc1101.packet_get" ||
+         bin == "cc1101.packet_set" ||
+         bin == "cc1101.packet_tx_text" ||
+         bin == "cc1101.packet_rx_once";
 }
 
 void buildInfoPayload(JsonObject obj) {
@@ -194,7 +293,7 @@ bool NodeCommandHandler::handleSystemWhich(const String &invokeId,
     }
 
     const String bin = v.as<const char *>();
-    if (bin == "cc1101.info" || bin == "cc1101.set_freq" || bin == "cc1101.tx") {
+    if (isSupportedBin(bin)) {
       binsOut[bin] = "builtin://t-embed-cc1101";
     }
   }
@@ -293,6 +392,65 @@ bool NodeCommandHandler::handleSystemRun(const String &invokeId,
           serializeJson(resultPayload, stdoutText);
           success = true;
         }
+      }
+    }
+  } else if (cmd == "cc1101.read_rssi") {
+    String rssiErr;
+    const int rssi = readCc1101RssiDbm(&rssiErr);
+    if (!rssiErr.isEmpty()) {
+      exitCode = 1;
+      stderrText = rssiErr;
+    } else {
+      result["rssiDbm"] = rssi;
+      serializeJson(resultPayload, stdoutText);
+      success = true;
+    }
+  } else if (cmd == "cc1101.packet_get") {
+    appendPacketConfigPayload(result, getCc1101PacketConfig());
+    serializeJson(resultPayload, stdoutText);
+    success = true;
+  } else if (cmd == "cc1101.packet_tx_text") {
+    if (args.count < 2) {
+      exitCode = 2;
+      stderrText = "usage: cc1101.packet_tx_text <text> [txDelayMs]";
+    } else {
+      int txDelayMs = 25;
+      if (args.count >= 3 && !parseIntToken(args.values[2], txDelayMs)) {
+        exitCode = 2;
+        stderrText = "invalid txDelayMs";
+      } else {
+        String txErr;
+        if (!sendCc1101PacketText(args.values[1], txDelayMs, txErr)) {
+          exitCode = 1;
+          stderrText = txErr;
+        } else {
+          result["sent"] = true;
+          result["bytes"] = args.values[1].length();
+          result["txDelayMs"] = txDelayMs;
+          serializeJson(resultPayload, stdoutText);
+          success = true;
+        }
+      }
+    }
+  } else if (cmd == "cc1101.packet_rx_once") {
+    int timeoutMs = 5000;
+    if (args.count >= 2 && !parseIntToken(args.values[1], timeoutMs)) {
+      exitCode = 2;
+      stderrText = "invalid timeoutMs";
+    } else {
+      std::vector<uint8_t> packet;
+      int rssi = 0;
+      String rxErr;
+      if (!receiveCc1101Packet(packet, timeoutMs, &rssi, rxErr)) {
+        exitCode = 1;
+        stderrText = rxErr;
+      } else {
+        result["size"] = static_cast<uint32_t>(packet.size());
+        result["rssiDbm"] = rssi;
+        result["hex"] = bytesToHex(packet);
+        result["ascii"] = bytesToAscii(packet);
+        serializeJson(resultPayload, stdoutText);
+        success = true;
       }
     }
   } else {
@@ -416,6 +574,186 @@ bool NodeCommandHandler::handleCc1101Command(const String &invokeId,
     payload["protocol"] = protocol;
     payload["repeat"] = repeat;
     payload["frequencyMhz"] = getCc1101FrequencyMhz();
+    gateway_->sendInvokeOk(invokeId, nodeId, payload);
+    return true;
+  }
+
+  if (command == "cc1101.read_rssi") {
+    String rssiErr;
+    const int rssi = readCc1101RssiDbm(&rssiErr);
+    if (!rssiErr.isEmpty()) {
+      gateway_->sendInvokeError(invokeId,
+                                nodeId,
+                                "UNAVAILABLE",
+                                rssiErr);
+      return true;
+    }
+
+    payload["rssiDbm"] = rssi;
+    gateway_->sendInvokeOk(invokeId, nodeId, payload);
+    return true;
+  }
+
+  if (command == "cc1101.packet_get") {
+    appendPacketConfigPayload(payload.to<JsonObject>(), getCc1101PacketConfig());
+    gateway_->sendInvokeOk(invokeId, nodeId, payload);
+    return true;
+  }
+
+  if (command == "cc1101.packet_set") {
+    Cc1101PacketConfig cfg = getCc1101PacketConfig();
+    uint32_t u32 = 0;
+    float fval = 0.0f;
+    bool bval = false;
+
+    if (!params["modulation"].isNull()) {
+      if (!readUInt32FromJson(params["modulation"], u32) || u32 > 255) {
+        gateway_->sendInvokeError(invokeId, nodeId, "INVALID_REQUEST", "invalid modulation");
+        return true;
+      }
+      cfg.modulation = static_cast<uint8_t>(u32);
+    }
+    if (!params["channel"].isNull()) {
+      if (!readUInt32FromJson(params["channel"], u32) || u32 > 255) {
+        gateway_->sendInvokeError(invokeId, nodeId, "INVALID_REQUEST", "invalid channel");
+        return true;
+      }
+      cfg.channel = static_cast<uint8_t>(u32);
+    }
+    if (!params["dataRateKbps"].isNull()) {
+      if (!readFloatFromJson(params["dataRateKbps"], fval)) {
+        gateway_->sendInvokeError(invokeId, nodeId, "INVALID_REQUEST", "invalid dataRateKbps");
+        return true;
+      }
+      cfg.dataRateKbps = fval;
+    }
+    if (!params["deviationKHz"].isNull()) {
+      if (!readFloatFromJson(params["deviationKHz"], fval)) {
+        gateway_->sendInvokeError(invokeId, nodeId, "INVALID_REQUEST", "invalid deviationKHz");
+        return true;
+      }
+      cfg.deviationKHz = fval;
+    }
+    if (!params["rxBandwidthKHz"].isNull()) {
+      if (!readFloatFromJson(params["rxBandwidthKHz"], fval)) {
+        gateway_->sendInvokeError(invokeId, nodeId, "INVALID_REQUEST", "invalid rxBandwidthKHz");
+        return true;
+      }
+      cfg.rxBandwidthKHz = fval;
+    }
+    if (!params["syncMode"].isNull()) {
+      if (!readUInt32FromJson(params["syncMode"], u32) || u32 > 255) {
+        gateway_->sendInvokeError(invokeId, nodeId, "INVALID_REQUEST", "invalid syncMode");
+        return true;
+      }
+      cfg.syncMode = static_cast<uint8_t>(u32);
+    }
+    if (!params["packetFormat"].isNull()) {
+      if (!readUInt32FromJson(params["packetFormat"], u32) || u32 > 255) {
+        gateway_->sendInvokeError(invokeId, nodeId, "INVALID_REQUEST", "invalid packetFormat");
+        return true;
+      }
+      cfg.packetFormat = static_cast<uint8_t>(u32);
+    }
+    if (!params["crcEnabled"].isNull()) {
+      if (!readBoolFromJson(params["crcEnabled"], bval)) {
+        gateway_->sendInvokeError(invokeId, nodeId, "INVALID_REQUEST", "invalid crcEnabled");
+        return true;
+      }
+      cfg.crcEnabled = bval;
+    }
+    if (!params["lengthConfig"].isNull()) {
+      if (!readUInt32FromJson(params["lengthConfig"], u32) || u32 > 255) {
+        gateway_->sendInvokeError(invokeId, nodeId, "INVALID_REQUEST", "invalid lengthConfig");
+        return true;
+      }
+      cfg.lengthConfig = static_cast<uint8_t>(u32);
+    }
+    if (!params["packetLength"].isNull()) {
+      if (!readUInt32FromJson(params["packetLength"], u32) || u32 > 255) {
+        gateway_->sendInvokeError(invokeId, nodeId, "INVALID_REQUEST", "invalid packetLength");
+        return true;
+      }
+      cfg.packetLength = static_cast<uint8_t>(u32);
+    }
+    if (!params["whitening"].isNull()) {
+      if (!readBoolFromJson(params["whitening"], bval)) {
+        gateway_->sendInvokeError(invokeId, nodeId, "INVALID_REQUEST", "invalid whitening");
+        return true;
+      }
+      cfg.whitening = bval;
+    }
+    if (!params["manchester"].isNull()) {
+      if (!readBoolFromJson(params["manchester"], bval)) {
+        gateway_->sendInvokeError(invokeId, nodeId, "INVALID_REQUEST", "invalid manchester");
+        return true;
+      }
+      cfg.manchester = bval;
+    }
+
+    String applyErr;
+    if (!configureCc1101Packet(cfg, applyErr)) {
+      gateway_->sendInvokeError(invokeId, nodeId, "INVALID_REQUEST", applyErr);
+      return true;
+    }
+
+    payload["applied"] = true;
+    appendPacketConfigPayload(payload.as<JsonObject>(), getCc1101PacketConfig());
+    gateway_->sendInvokeOk(invokeId, nodeId, payload);
+    return true;
+  }
+
+  if (command == "cc1101.packet_tx_text") {
+    const String text = params["text"].as<String>();
+    if (text.isEmpty()) {
+      gateway_->sendInvokeError(invokeId, nodeId, "INVALID_REQUEST", "text is required");
+      return true;
+    }
+
+    int txDelayMs = 25;
+    if (!params["txDelayMs"].isNull() && !readIntFromJson(params["txDelayMs"], txDelayMs)) {
+      gateway_->sendInvokeError(invokeId, nodeId, "INVALID_REQUEST", "invalid txDelayMs");
+      return true;
+    }
+
+    String txErr;
+    if (!sendCc1101PacketText(text, txDelayMs, txErr)) {
+      gateway_->sendInvokeError(invokeId,
+                                nodeId,
+                                "UNAVAILABLE",
+                                txErr);
+      return true;
+    }
+
+    payload["sent"] = true;
+    payload["bytes"] = text.length();
+    payload["txDelayMs"] = txDelayMs;
+    gateway_->sendInvokeOk(invokeId, nodeId, payload);
+    return true;
+  }
+
+  if (command == "cc1101.packet_rx_once") {
+    int timeoutMs = 5000;
+    if (!params["timeoutMs"].isNull() && !readIntFromJson(params["timeoutMs"], timeoutMs)) {
+      gateway_->sendInvokeError(invokeId, nodeId, "INVALID_REQUEST", "invalid timeoutMs");
+      return true;
+    }
+
+    std::vector<uint8_t> packet;
+    int rssi = 0;
+    String rxErr;
+    if (!receiveCc1101Packet(packet, timeoutMs, &rssi, rxErr)) {
+      gateway_->sendInvokeError(invokeId,
+                                nodeId,
+                                "UNAVAILABLE",
+                                rxErr);
+      return true;
+    }
+
+    payload["size"] = static_cast<uint32_t>(packet.size());
+    payload["rssiDbm"] = rssi;
+    payload["hex"] = bytesToHex(packet);
+    payload["ascii"] = bytesToAscii(packet);
     gateway_->sendInvokeOk(invokeId, nodeId, payload);
     return true;
   }

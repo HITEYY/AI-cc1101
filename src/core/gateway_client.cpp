@@ -5,6 +5,7 @@
 #include <WiFi.h>
 #include <esp_system.h>
 #include <mbedtls/base64.h>
+#include <ctype.h>
 #include <time.h>
 
 #include "user_config.h"
@@ -23,6 +24,9 @@ constexpr unsigned long kConnectDelayMs = 750UL;
 constexpr size_t kDevicePrivateKeyLen = 32;
 constexpr size_t kDevicePublicKeyLen = 32;
 constexpr size_t kDeviceSignatureLen = 64;
+constexpr size_t kGatewayFrameDocCapacity = 8192;
+constexpr size_t kGatewayFrameFilterCapacity = 1024;
+constexpr size_t kMaxGatewayFrameBytes = 131072;
 
 }  // namespace
 
@@ -399,6 +403,11 @@ void GatewayClient::sendConnectRequest() {
   commands.add("cc1101.info");
   commands.add("cc1101.set_freq");
   commands.add("cc1101.tx");
+  commands.add("cc1101.read_rssi");
+  commands.add("cc1101.packet_get");
+  commands.add("cc1101.packet_set");
+  commands.add("cc1101.packet_tx_text");
+  commands.add("cc1101.packet_rx_once");
 
   JsonObject auth = params.createNestedObject("auth");
   if (usePassword) {
@@ -426,10 +435,83 @@ void GatewayClient::sendConnectRequest() {
 }
 
 void GatewayClient::handleGatewayFrame(const char *text, size_t len) {
-  DynamicJsonDocument doc(4096);
-  const auto err = deserializeJson(doc, text, len);
+  if (!text || len == 0) {
+    return;
+  }
+
+  if (len > kMaxGatewayFrameBytes) {
+    lastError_ = "Gateway frame too large (" + String(static_cast<unsigned long>(len)) +
+                 " bytes)";
+    return;
+  }
+
+  size_t start = 0;
+  while (start < len && isspace(static_cast<unsigned char>(text[start]))) {
+    ++start;
+  }
+  if (start >= len) {
+    return;
+  }
+
+  // Ignore non-JSON control frames that can be sent by some intermediaries.
+  if (text[start] != '{') {
+    return;
+  }
+
+  const size_t parseLen = len - start;
+  DynamicJsonDocument filter(kGatewayFrameFilterCapacity);
+  filter["type"] = true;
+  filter["id"] = true;
+  filter["ok"] = true;
+  filter["event"] = true;
+
+  JsonObject filterError = filter.createNestedObject("error");
+  filterError["message"] = true;
+
+  JsonObject filterPayload = filter.createNestedObject("payload");
+  filterPayload["nonce"] = true;
+  filterPayload["ts"] = true;
+  filterPayload["id"] = true;
+  filterPayload["nodeId"] = true;
+  filterPayload["command"] = true;
+  filterPayload["paramsJSON"] = true;
+  filterPayload["messageId"] = true;
+  filterPayload["msgId"] = true;
+  filterPayload["type"] = true;
+  filterPayload["kind"] = true;
+  filterPayload["from"] = true;
+  filterPayload["sender"] = true;
+  filterPayload["source"] = true;
+  filterPayload["to"] = true;
+  filterPayload["target"] = true;
+  filterPayload["recipient"] = true;
+  filterPayload["text"] = true;
+  filterPayload["message"] = true;
+  filterPayload["body"] = true;
+  filterPayload["fileName"] = true;
+  filterPayload["name"] = true;
+  filterPayload["file"] = true;
+  filterPayload["contentType"] = true;
+  filterPayload["mime"] = true;
+  filterPayload["mimeType"] = true;
+  filterPayload["size"] = true;
+  filterPayload["bytes"] = true;
+
+  JsonObject filterAuth = filterPayload.createNestedObject("auth");
+  filterAuth["deviceToken"] = true;
+
+  DynamicJsonDocument doc(kGatewayFrameDocCapacity);
+  const auto err = deserializeJson(doc,
+                                   text + start,
+                                   parseLen,
+                                   DeserializationOption::Filter(filter));
   if (err) {
-    lastError_ = "Invalid gateway frame";
+    if (err == DeserializationError::NoMemory) {
+      lastError_ = "Gateway frame too large (" +
+                   String(static_cast<unsigned long>(parseLen)) + " bytes)";
+    } else {
+      lastError_ = "Invalid gateway frame";
+    }
     return;
   }
 
