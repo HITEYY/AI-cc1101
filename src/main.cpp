@@ -2,6 +2,8 @@
 #include <ArduinoJson.h>
 #include <WiFi.h>
 #include <Wire.h>
+#include <driver/rtc_io.h>
+#include <esp_sleep.h>
 
 #define XPOWERS_CHIP_BQ25896
 #include <XPowersLib.h>
@@ -31,8 +33,71 @@ BleManager gBle;
 NodeCommandHandler gNodeHandler;
 AppContext gAppContext;
 XPowersPPM gPmu;
+bool gSleepDetectionArmed = false;
+
+constexpr unsigned long kDeepSleepHoldMs = 3000UL;
+
+void enableTopButtonWakeup() {
+  const gpio_num_t wakePin = static_cast<gpio_num_t>(boardpins::kEncoderBack);
+  rtc_gpio_init(wakePin);
+  rtc_gpio_set_direction(wakePin, RTC_GPIO_MODE_INPUT_ONLY);
+  rtc_gpio_pullup_en(wakePin);
+  rtc_gpio_pulldown_dis(wakePin);
+  esp_sleep_disable_wakeup_source(ESP_SLEEP_WAKEUP_ALL);
+  esp_sleep_enable_ext0_wakeup(wakePin, 0);
+}
+
+[[noreturn]] void enterDeepSleepNow() {
+  Serial.println("[power] entering deep sleep");
+
+  gGateway.disconnectNow();
+  gBle.disconnectNow();
+  gWifi.disconnect();
+
+  pinMode(boardpins::kTftBacklight, OUTPUT);
+  analogWrite(boardpins::kTftBacklight, 0);
+  digitalWrite(boardpins::kTftBacklight, LOW);
+
+  enableTopButtonWakeup();
+  delay(120);
+  Serial.flush();
+  esp_deep_sleep_start();
+
+  while (true) {
+    delay(1000);
+  }
+}
+
+void tickDeepSleepButton() {
+  static unsigned long pressedAtMs = 0;
+
+  const bool pressed = digitalRead(boardpins::kEncoderBack) == LOW;
+  const unsigned long now = millis();
+
+  if (!gSleepDetectionArmed) {
+    if (!pressed) {
+      gSleepDetectionArmed = true;
+    }
+    return;
+  }
+
+  if (!pressed) {
+    pressedAtMs = 0;
+    return;
+  }
+
+  if (pressedAtMs == 0) {
+    pressedAtMs = now;
+    return;
+  }
+
+  if (now - pressedAtMs >= kDeepSleepHoldMs) {
+    enterDeepSleepNow();
+  }
+}
 
 void runBackgroundTick() {
+  tickDeepSleepButton();
   gWifi.tick();
   gGateway.tick();
   gBle.tick();
@@ -127,7 +192,11 @@ void setup() {
   Serial.begin(115200);
   delay(400);
 
+  const esp_sleep_wakeup_cause_t wakeCause = esp_sleep_get_wakeup_cause();
   Serial.println("[boot] start");
+  if (wakeCause == ESP_SLEEP_WAKEUP_EXT0) {
+    Serial.println("[boot] wake source: top button");
+  }
 
   // Keep shared SPI devices deselected before any peripheral init.
   pinMode(boardpins::kTftCs, OUTPUT);
@@ -141,6 +210,7 @@ void setup() {
 
   Serial.println("[boot] ui.begin()");
   gUi.begin();
+  gSleepDetectionArmed = digitalRead(boardpins::kEncoderBack) == HIGH;
 
   Serial.println("[boot] cc1101.init()");
   const bool ccReady = initCc1101Radio();
