@@ -103,6 +103,7 @@ void InputAdapter::tick() {
   if (okPressed && !okLongFired_ && okPressedAt_ > 0 &&
       now - okPressedAt_ >= kLongPressMs) {
     pendingEvent_.back = true;
+    pendingEvent_.okLong = true;
     enqueueKeyPressRelease(LV_KEY_ESC);
     okLongFired_ = true;
   }

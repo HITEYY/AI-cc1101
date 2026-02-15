@@ -8,6 +8,7 @@ struct InputEvent {
   int delta = 0;
   bool ok = false;
   bool back = false;
+  bool okLong = false;
 };
 
 class InputAdapter {
@@ -53,4 +54,3 @@ class InputAdapter {
   uint8_t keyTail_ = 0;
   uint8_t keyCount_ = 0;
 };
-

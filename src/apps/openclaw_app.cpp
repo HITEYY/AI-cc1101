@@ -263,20 +263,18 @@ bool ensureGatewayReady(AppContext &ctx,
   return true;
 }
 
-void sendTextMessage(AppContext &ctx,
+bool sendTextPayload(AppContext &ctx,
+                     const String &rawText,
                      const std::function<void()> &backgroundTick) {
   if (!ensureGatewayReady(ctx, backgroundTick)) {
-    return;
+    return false;
   }
 
-  String text;
-  if (!ctx.uiRuntime->textInput("Text Message", text, false, backgroundTick)) {
-    return;
-  }
+  String text = rawText;
   text.trim();
   if (text.isEmpty()) {
     ctx.uiRuntime->showToast("Messenger", "Message is empty", 1400, backgroundTick);
-    return;
+    return false;
   }
 
   DynamicJsonDocument payload(2048);
@@ -294,7 +292,7 @@ void sendTextMessage(AppContext &ctx,
 
   if (!ctx.gateway->sendNodeEvent("msg.text", payload)) {
     ctx.uiRuntime->showToast("Messenger", "Text send failed", 1500, backgroundTick);
-    return;
+    return false;
   }
 
   GatewayInboxMessage sent;
@@ -308,6 +306,17 @@ void sendTextMessage(AppContext &ctx,
   pushOutbox(sent);
 
   ctx.uiRuntime->showToast("Messenger", "Text sent", 1100, backgroundTick);
+  return true;
+}
+
+void sendTextMessage(AppContext &ctx,
+                     const std::function<void()> &backgroundTick) {
+  String text;
+  if (!ctx.uiRuntime->textInput("Text Message", text, false, backgroundTick)) {
+    return;
+  }
+
+  sendTextPayload(ctx, text, backgroundTick);
 }
 
 bool sendVoiceFileMessage(AppContext &ctx,
@@ -853,50 +862,18 @@ std::vector<ChatEntry> collectChatEntries(AppContext &ctx) {
   return entries;
 }
 
-void showChatEntryDetail(AppContext &ctx,
-                         const ChatEntry &entry,
-                         const std::function<void()> &backgroundTick) {
-  const GatewayInboxMessage &message = entry.message;
+std::vector<String> buildMessengerPreviewLines(const std::vector<ChatEntry> &entries) {
   std::vector<String> lines;
-  lines.push_back("Direction: " + String(entry.outgoing ? "Sent" : "Received"));
-  lines.push_back("Time: " + formatTsShort(message.tsMs));
-  lines.push_back("ID: " + (message.id.isEmpty() ? String("(none)") : message.id));
-  lines.push_back("Event: " + (message.event.isEmpty() ? String("(none)") : message.event));
-  lines.push_back("Type: " + (message.type.isEmpty() ? String("text") : message.type));
-  lines.push_back("From: " + (message.from.isEmpty() ? String("(none)") : message.from));
-  lines.push_back("To: " + (message.to.isEmpty() ? String("(none)") : message.to));
-
-  if (!message.text.isEmpty()) {
-    lines.push_back("Message: " + message.text);
-  }
-  if (!message.fileName.isEmpty()) {
-    lines.push_back("File: " + message.fileName);
-  }
-  if (!message.contentType.isEmpty()) {
-    lines.push_back("MIME: " + message.contentType);
-  }
-  if (message.voiceBytes > 0) {
-    lines.push_back("Bytes: " + String(message.voiceBytes));
-  }
-  if (message.tsMs > 0) {
-    lines.push_back("TS(ms): " + String(static_cast<unsigned long long>(message.tsMs)));
+  if (entries.empty()) {
+    lines.push_back("(no messages)");
+    return lines;
   }
 
-  ctx.uiRuntime->showInfo("Chat Detail", lines, backgroundTick, "OK/BACK Exit");
-}
-
-void clearChatLog(AppContext &ctx,
-                  const std::function<void()> &backgroundTick) {
-  if (!ctx.uiRuntime->confirm("Clear Chat",
-                       "Delete all sent and received logs?",
-                       backgroundTick,
-                       "Clear",
-                       "Cancel")) {
-    return;
+  const int total = static_cast<int>(entries.size());
+  for (int i = total - 1; i >= 0 && static_cast<int>(lines.size()) < 3; --i) {
+    lines.push_back(makeChatPreview(entries[static_cast<size_t>(i)]));
   }
-  ctx.gateway->clearInbox();
-  clearOutbox();
-  ctx.uiRuntime->showToast("Chat", "Chat log cleared", 1200, backgroundTick);
+  return lines;
 }
 
 void runMessagingMenu(AppContext &ctx,
@@ -905,68 +882,41 @@ void runMessagingMenu(AppContext &ctx,
 
   while (true) {
     std::vector<ChatEntry> entries = collectChatEntries(ctx);
-    std::vector<int> entryMap;
+    std::vector<String> previewLines = buildMessengerPreviewLines(entries);
+    const MessengerAction action = ctx.uiRuntime->messengerHomeLoop(previewLines,
+                                                                    selected,
+                                                                    backgroundTick);
 
-    std::vector<String> menu;
-    menu.push_back("Write Message");
-    menu.push_back("Send File (SD)");
-    menu.push_back("Record Voice (MIC/BLE)");
-    menu.push_back("Send Voice File (SD)");
-    menu.push_back("Clear Chat");
-
-    for (int i = static_cast<int>(entries.size()) - 1; i >= 0; --i) {
-      menu.push_back(makeChatPreview(entries[static_cast<size_t>(i)]));
-      entryMap.push_back(i);
-    }
-    menu.push_back("Back");
-
-    if (selected >= static_cast<int>(menu.size())) {
-      selected = static_cast<int>(menu.size()) - 1;
-      if (selected < 0) {
-        selected = 0;
-      }
-    }
-
-    String subtitle = "To:" + trimMiddle(defaultAgentId(), 12);
-    subtitle += " Msg:";
-    subtitle += String(static_cast<unsigned long>(entries.size()));
-    subtitle += " GW:";
-    subtitle += ctx.gateway->status().gatewayReady ? "READY" : "DOWN";
-
-    const int choice = ctx.uiRuntime->menuLoop("Messenger",
-                                        menu,
-                                        selected,
-                                        backgroundTick,
-                                        "OK Select  BACK Exit",
-                                        subtitle);
-    if (choice < 0 || choice == static_cast<int>(menu.size()) - 1) {
+    if (action == MessengerAction::Back) {
       return;
     }
 
-    selected = choice;
-    if (choice == 0) {
-      sendTextMessage(ctx, backgroundTick);
-    } else if (choice == 1) {
-      sendFileMessage(ctx, backgroundTick);
-    } else if (choice == 2) {
-      recordVoiceMessage(ctx, backgroundTick);
-    } else if (choice == 3) {
-      sendVoiceMessage(ctx, backgroundTick);
-    } else if (choice == 4) {
-      clearChatLog(ctx, backgroundTick);
-    } else {
-      const size_t idx = static_cast<size_t>(choice - 5);
-      if (idx >= entryMap.size()) {
-        continue;
+    if (action == MessengerAction::TextLong) {
+      selected = 0;
+      if (ctx.uiRuntime->confirm("New Session",
+                                 "/new command send?",
+                                 backgroundTick,
+                                 "Send",
+                                 "Cancel")) {
+        sendTextPayload(ctx, "/new", backgroundTick);
       }
-      const int entryIndex = entryMap[idx];
-      if (entryIndex < 0 || entryIndex >= static_cast<int>(entries.size())) {
-        continue;
-      }
-      showChatEntryDetail(ctx,
-                          entries[static_cast<size_t>(entryIndex)],
-                          backgroundTick);
+      continue;
     }
+
+    if (action == MessengerAction::Text) {
+      selected = 0;
+      sendTextMessage(ctx, backgroundTick);
+      continue;
+    }
+
+    if (action == MessengerAction::Voice) {
+      selected = 1;
+      recordVoiceMessage(ctx, backgroundTick);
+      continue;
+    }
+
+    selected = 2;
+    sendFileMessage(ctx, backgroundTick);
   }
 }
 

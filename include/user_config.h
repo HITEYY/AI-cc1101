@@ -71,6 +71,9 @@
 #define USER_NTP_SERVER_1 "pool.ntp.org"
 #define USER_NTP_SERVER_2 "time.nist.gov"
 
+// Display backlight brightness percent (0~100)
+#define USER_DISPLAY_BRIGHTNESS_PERCENT 100
+
 // Battery gauge (BQ27220 over I2C on T-Embed CC1101)
 #define USER_BATTERY_GAUGE_ENABLED 1
 #define USER_BATTERY_GAUGE_ADDR 0x55

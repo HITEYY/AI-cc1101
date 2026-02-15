@@ -499,6 +499,16 @@ GatewayAuthMode sanitizeAuthMode(int mode) {
   return mode == 1 ? GatewayAuthMode::Password : GatewayAuthMode::Token;
 }
 
+uint8_t sanitizeDisplayBrightnessPercent(int value) {
+  if (value < 0) {
+    return 0;
+  }
+  if (value > 100) {
+    return 100;
+  }
+  return static_cast<uint8_t>(value);
+}
+
 void toJson(const RuntimeConfig &config, JsonObject obj) {
   obj["version"] = config.version;
   obj["wifiSsid"] = config.wifiSsid;
@@ -519,6 +529,7 @@ void toJson(const RuntimeConfig &config, JsonObject obj) {
   obj["appMarketReleaseAsset"] = config.appMarketReleaseAsset;
   obj["uiLanguage"] = config.uiLanguage;
   obj["timezoneTz"] = config.timezoneTz;
+  obj["displayBrightnessPercent"] = config.displayBrightnessPercent;
 }
 
 void fromJson(const JsonObjectConst &obj, RuntimeConfig &config) {
@@ -550,6 +561,8 @@ void fromJson(const JsonObjectConst &obj, RuntimeConfig &config) {
   config.uiLanguage = String(static_cast<const char *>(obj["uiLanguage"] | "en"));
   config.timezoneTz =
       String(static_cast<const char *>(obj["timezoneTz"] | USER_TIMEZONE_TZ));
+  config.displayBrightnessPercent = sanitizeDisplayBrightnessPercent(
+      obj["displayBrightnessPercent"] | USER_DISPLAY_BRIGHTNESS_PERCENT);
 }
 
 }  // namespace
@@ -590,6 +603,8 @@ RuntimeConfig makeDefaultConfig() {
   }
   config.uiLanguage = "en";
   config.timezoneTz = USER_TIMEZONE_TZ;
+  config.displayBrightnessPercent =
+      sanitizeDisplayBrightnessPercent(USER_DISPLAY_BRIGHTNESS_PERCENT);
 
   return config;
 }
@@ -652,6 +667,13 @@ bool validateConfig(const RuntimeConfig &config, String *error) {
   if (config.timezoneTz.isEmpty()) {
     if (error) {
       *error = "Timezone cannot be empty";
+    }
+    return false;
+  }
+
+  if (config.displayBrightnessPercent > 100) {
+    if (error) {
+      *error = "Display brightness must be 0~100";
     }
     return false;
   }

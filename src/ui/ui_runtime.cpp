@@ -51,6 +51,22 @@ constexpr uint32_t kLauncherPrimary = 0xEAF6FF;
 constexpr uint32_t kLauncherSide = 0x2D6F93;
 constexpr uint32_t kLauncherMuted = 0x8FB6CC;
 constexpr uint32_t kLauncherLine = 0x1A3344;
+constexpr uint32_t kLauncherCharging = 0x4CD964;
+
+uint8_t clampBrightnessPercent(int percent) {
+  if (percent < 0) {
+    return 0;
+  }
+  if (percent > 100) {
+    return 100;
+  }
+  return static_cast<uint8_t>(percent);
+}
+
+uint8_t brightnessPwmFromPercent(uint8_t percent) {
+  const unsigned int scaled = static_cast<unsigned int>(percent) * 255U;
+  return static_cast<uint8_t>((scaled + 50U) / 100U);
+}
 
 int wrapIndex(int value, int count) {
   if (count <= 0) {
@@ -123,6 +139,10 @@ class UiRuntime::Impl {
   String headerTime;
   String headerStatus;
   int batteryPct = -1;
+  bool batteryCharging = false;
+  bool batteryChargingKnown = false;
+  bool batteryWireReady = false;
+  uint8_t displayBrightnessPercent = clampBrightnessPercent(USER_DISPLAY_BRIGHTNESS_PERCENT);
   int sdPct = -1;
   bool ntpStarted = false;
   bool launcherIconsAvailable = false;
@@ -144,10 +164,26 @@ class UiRuntime::Impl {
       return false;
     }
 
+    applyBacklight();
     input.begin(port.display());
     applyTheme();
     launcherIconsAvailable = initLauncherIcons();
     return true;
+  }
+
+  void applyBacklight() const {
+    pinMode(boardpins::kTftBacklight, OUTPUT);
+    analogWrite(boardpins::kTftBacklight,
+                brightnessPwmFromPercent(displayBrightnessPercent));
+  }
+
+  void setDisplayBrightnessPercent(uint8_t percent) {
+    displayBrightnessPercent = clampBrightnessPercent(percent);
+    applyBacklight();
+  }
+
+  uint8_t getDisplayBrightnessPercent() const {
+    return displayBrightnessPercent;
   }
 
   void applyTheme() {
@@ -178,16 +214,27 @@ class UiRuntime::Impl {
     out.delta = ev.delta;
     out.ok = ev.ok;
     out.back = ev.back;
+    out.okLong = ev.okLong;
     return out;
+  }
+
+  bool ensureBatteryI2cReady() {
+#if USER_BATTERY_GAUGE_ENABLED
+    if (!batteryWireReady) {
+      Wire.begin(USER_BATTERY_GAUGE_SDA, USER_BATTERY_GAUGE_SCL);
+      Wire.setTimeOut(5);
+      batteryWireReady = true;
+    }
+    return true;
+#else
+    return false;
+#endif
   }
 
   int readBatteryPercent() {
 #if USER_BATTERY_GAUGE_ENABLED
-    static bool wireReady = false;
-    if (!wireReady) {
-      Wire.begin(USER_BATTERY_GAUGE_SDA, USER_BATTERY_GAUGE_SCL);
-      Wire.setTimeOut(5);
-      wireReady = true;
+    if (!ensureBatteryI2cReady()) {
+      return -1;
     }
 
     Wire.beginTransmission(USER_BATTERY_GAUGE_ADDR);
@@ -210,6 +257,44 @@ class UiRuntime::Impl {
     return pct;
 #else
     return -1;
+#endif
+  }
+
+  bool readBatteryCharging(bool *known = nullptr) {
+#if USER_BATTERY_GAUGE_ENABLED
+    if (known) {
+      *known = false;
+    }
+
+    if (!ensureBatteryI2cReady()) {
+      return false;
+    }
+
+    constexpr uint8_t kPmuAddr = 0x6B;   // BQ25896
+    constexpr uint8_t kStatusReg = 0x0B; // CHRG_STAT[4:3]
+
+    Wire.beginTransmission(kPmuAddr);
+    Wire.write(kStatusReg);
+    if (Wire.endTransmission(false) != 0) {
+      return false;
+    }
+
+    const int readCount = Wire.requestFrom(static_cast<int>(kPmuAddr), 1);
+    if (readCount < 1) {
+      return false;
+    }
+
+    const uint8_t status = static_cast<uint8_t>(Wire.read());
+    const uint8_t chargeState = static_cast<uint8_t>((status >> 3) & 0x03);
+    if (known) {
+      *known = true;
+    }
+    return chargeState == 1U || chargeState == 2U;
+#else
+    if (known) {
+      *known = false;
+    }
+    return false;
 #endif
   }
 
@@ -240,6 +325,7 @@ class UiRuntime::Impl {
     if (now - lastBatteryPollMs >= kBatteryPollMs || batteryPct < 0) {
       lastBatteryPollMs = now;
       batteryPct = readBatteryPercent();
+      batteryCharging = readBatteryCharging(&batteryChargingKnown);
     }
 
     String status = "W:";
@@ -386,6 +472,9 @@ class UiRuntime::Impl {
     constexpr int capH = 4;
     constexpr int segCount = 4;
 
+    const uint32_t batteryColor =
+        (batteryChargingKnown && batteryCharging) ? kLauncherCharging : kLauncherPrimary;
+
     lv_obj_t *body = lv_obj_create(parent);
     disableScroll(body);
     lv_obj_remove_style_all(body);
@@ -394,7 +483,7 @@ class UiRuntime::Impl {
     lv_obj_set_style_radius(body, 1, 0);
     lv_obj_set_style_bg_opa(body, LV_OPA_TRANSP, 0);
     lv_obj_set_style_border_width(body, 1, 0);
-    lv_obj_set_style_border_color(body, lv_color_hex(kLauncherPrimary), 0);
+    lv_obj_set_style_border_color(body, lv_color_hex(batteryColor), 0);
 
     lv_obj_t *cap = lv_obj_create(parent);
     disableScroll(cap);
@@ -403,7 +492,7 @@ class UiRuntime::Impl {
     lv_obj_set_size(cap, capW, capH);
     lv_obj_set_style_radius(cap, 1, 0);
     lv_obj_set_style_bg_opa(cap, LV_OPA_COVER, 0);
-    lv_obj_set_style_bg_color(cap, lv_color_hex(kLauncherPrimary), 0);
+    lv_obj_set_style_bg_color(cap, lv_color_hex(batteryColor), 0);
 
     int filled = 0;
     if (batteryPct >= 0) {
@@ -429,7 +518,7 @@ class UiRuntime::Impl {
       lv_obj_set_style_radius(seg, 1, 0);
       lv_obj_set_style_bg_opa(seg, LV_OPA_COVER, 0);
       if (i < filled) {
-        lv_obj_set_style_bg_color(seg, lv_color_hex(kLauncherPrimary), 0);
+        lv_obj_set_style_bg_color(seg, lv_color_hex(batteryColor), 0);
       } else {
         lv_obj_set_style_bg_color(seg, lv_color_hex(kLauncherLine), 0);
       }
@@ -706,6 +795,146 @@ class UiRuntime::Impl {
         lv_obj_set_style_bg_color(marker, lv_color_hex(kClrAccent), 0);
         lv_obj_set_style_bg_opa(marker, LV_OPA_COVER, 0);
       }
+    }
+
+    service(nullptr);
+  }
+
+  void renderMessengerHome(const std::vector<String> &previewLines, int selected) {
+    int contentTop = 0;
+    int contentBottom = 0;
+    renderBase("Messenger", "", "BACK Exit", contentTop, contentBottom);
+
+    const int w = lv_display_get_horizontal_resolution(port.display());
+    int contentH = contentBottom - contentTop + 1;
+    if (contentH < 1) {
+      contentH = 1;
+    }
+
+    int buttonH = 28;
+    if (buttonH > contentH / 2) {
+      buttonH = contentH / 2;
+    }
+    if (buttonH < 18) {
+      buttonH = 18;
+    }
+
+    const int sectionGap = 8;
+    int boxAvailH = contentH - buttonH - sectionGap;
+    if (boxAvailH < 24) {
+      boxAvailH = 24;
+    }
+
+    int boxSide = boxAvailH;
+    const int maxBoxW = w - 24;
+    if (boxSide > maxBoxW) {
+      boxSide = maxBoxW;
+    }
+    if (boxSide < 28) {
+      boxSide = 28;
+    }
+
+    int boxX = (w - boxSide) / 2;
+    if (boxX < 4) {
+      boxX = 4;
+    }
+    int boxY = contentTop + (boxAvailH - boxSide) / 2;
+    if (boxY < contentTop) {
+      boxY = contentTop;
+    }
+
+    lv_obj_t *box = lv_obj_create(lv_screen_active());
+    disableScroll(box);
+    lv_obj_remove_style_all(box);
+    lv_obj_set_pos(box, boxX, boxY);
+    lv_obj_set_size(box, boxSide, boxSide);
+    lv_obj_set_style_radius(box, 6, kStyleAny);
+    lv_obj_set_style_bg_color(box, lv_color_hex(kClrPanelSoft), kStyleAny);
+    lv_obj_set_style_bg_opa(box, kOpa92, kStyleAny);
+    lv_obj_set_style_border_width(box, 2, kStyleAny);
+    lv_obj_set_style_border_color(box, lv_color_hex(kClrAccent), kStyleAny);
+    lv_obj_set_style_border_opa(box, LV_OPA_COVER, kStyleAny);
+    lv_obj_set_style_pad_all(box, 0, kStyleAny);
+
+    size_t lineCount = previewLines.size();
+    if (lineCount == 0) {
+      lineCount = 1;
+    } else if (lineCount > 3) {
+      lineCount = 3;
+    }
+    const int lineHeight = static_cast<int>(font()->line_height + 2);
+    const int lineGap = 2;
+    int textTotalH = static_cast<int>(lineCount) * lineHeight +
+                     static_cast<int>(lineCount > 0 ? (lineCount - 1) * lineGap : 0);
+    int textStartY = (boxSide - textTotalH) / 2;
+    if (textStartY < 6) {
+      textStartY = 6;
+    }
+
+    for (size_t i = 0; i < lineCount; ++i) {
+      lv_obj_t *line = lv_label_create(box);
+      setSingleLineLabel(line, boxSide - 12, LV_TEXT_ALIGN_LEFT);
+      if (previewLines.empty()) {
+        lv_label_set_text(line, "(no messages)");
+      } else {
+        lv_label_set_text(line, previewLines[i].c_str());
+      }
+      lv_obj_set_style_text_color(line, lv_color_hex(kClrTextPrimary), 0);
+      lv_obj_set_pos(line, 6, textStartY + static_cast<int>(i) * (lineHeight + lineGap));
+    }
+
+    const int kButtonCount = 3;
+    const char *buttonLabels[kButtonCount] = {"Text", "Voice", "File"};
+    const int safeSelected = wrapIndex(selected, kButtonCount);
+
+    int buttonY = contentTop + boxAvailH + sectionGap;
+    if (buttonY + buttonH - 1 > contentBottom) {
+      buttonY = contentBottom - buttonH + 1;
+    }
+    if (buttonY < contentTop) {
+      buttonY = contentTop;
+    }
+
+    int rowX = 10;
+    int rowW = w - 20;
+    const int buttonGap = 6;
+    int buttonW = (rowW - (buttonGap * (kButtonCount - 1))) / kButtonCount;
+    if (buttonW < 24) {
+      rowX = 4;
+      rowW = w - 8;
+      buttonW = (rowW - (buttonGap * (kButtonCount - 1))) / kButtonCount;
+      if (buttonW < 20) {
+        buttonW = 20;
+      }
+    }
+
+    for (int i = 0; i < kButtonCount; ++i) {
+      lv_obj_t *btn = lv_obj_create(lv_screen_active());
+      disableScroll(btn);
+      lv_obj_remove_style_all(btn);
+      const int btnX = rowX + i * (buttonW + buttonGap);
+      lv_obj_set_pos(btn, btnX, buttonY);
+      lv_obj_set_size(btn, buttonW, buttonH);
+      lv_obj_set_style_radius(btn, 8, kStyleAny);
+      lv_obj_set_style_border_width(btn, 2, kStyleAny);
+      lv_obj_set_style_pad_all(btn, 0, kStyleAny);
+      lv_obj_set_style_bg_opa(btn, LV_OPA_COVER, kStyleAny);
+      lv_obj_set_style_border_opa(btn, LV_OPA_COVER, kStyleAny);
+
+      const bool isSelected = i == safeSelected;
+      lv_obj_set_style_bg_color(btn,
+                                isSelected ? lv_color_hex(kClrAccentSoft) : lv_color_hex(kClrPanel),
+                                kStyleAny);
+      lv_obj_set_style_border_color(btn,
+                                    isSelected ? lv_color_hex(kClrAccent)
+                                               : lv_color_hex(kClrTextMuted),
+                                    kStyleAny);
+
+      lv_obj_t *label = lv_label_create(btn);
+      setSingleLineLabel(label, buttonW - 6, LV_TEXT_ALIGN_CENTER);
+      lv_label_set_text(label, buttonLabels[i]);
+      lv_obj_set_style_text_color(label, lv_color_hex(kClrTextPrimary), kStyleAny);
+      lv_obj_center(label);
     }
 
     service(nullptr);
@@ -1262,6 +1491,14 @@ bool UiRuntime::syncTimezoneFromIp(String *resolvedTz, String *error) {
   return impl_->syncTimezoneFromIp(resolvedTz, error);
 }
 
+void UiRuntime::setDisplayBrightnessPercent(uint8_t percent) {
+  impl_->setDisplayBrightnessPercent(percent);
+}
+
+uint8_t UiRuntime::displayBrightnessPercent() const {
+  return impl_->getDisplayBrightnessPercent();
+}
+
 int UiRuntime::launcherLoop(const String &title,
                             const std::vector<String> &items,
                             int selectedIndex,
@@ -1336,6 +1573,52 @@ int UiRuntime::menuLoop(const String &title,
     }
     if (ev.back) {
       return -1;
+    }
+
+    delay(10);
+  }
+}
+
+MessengerAction UiRuntime::messengerHomeLoop(const std::vector<String> &previewLines,
+                                             int selectedIndex,
+                                             const std::function<void()> &backgroundTick) {
+  constexpr int kButtonCount = 3;
+  int selected = wrapIndex(selectedIndex, kButtonCount);
+  bool redraw = true;
+  unsigned long lastRefreshMs = millis();
+
+  while (true) {
+    const unsigned long now = millis();
+    if (redraw || now - lastRefreshMs >= kHeaderRefreshMs) {
+      impl_->renderMessengerHome(previewLines, selected);
+      redraw = false;
+      lastRefreshMs = now;
+    }
+
+    impl_->service(&backgroundTick);
+    UiEvent ev = pollInput();
+
+    if (ev.delta != 0) {
+      selected = wrapIndex(selected + (ev.delta > 0 ? 1 : -1), kButtonCount);
+      redraw = true;
+    }
+
+    if (ev.okLong && selected == 0) {
+      return MessengerAction::TextLong;
+    }
+
+    if (ev.ok) {
+      if (selected == 0) {
+        return MessengerAction::Text;
+      }
+      if (selected == 1) {
+        return MessengerAction::Voice;
+      }
+      return MessengerAction::File;
+    }
+
+    if (ev.back) {
+      return MessengerAction::Back;
     }
 
     delay(10);

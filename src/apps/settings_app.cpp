@@ -219,6 +219,40 @@ String keyboardPreview(const String &input) {
   return out;
 }
 
+String displayBrightnessLabel(uint8_t percent) {
+  String label = "Display Brightness: ";
+  label += String(static_cast<unsigned long>(percent));
+  label += "%";
+  return label;
+}
+
+bool parseBrightnessPercentInput(const String &input, uint8_t *outPercent) {
+  if (!outPercent) {
+    return false;
+  }
+
+  String normalized = input;
+  normalized.trim();
+  if (normalized.isEmpty()) {
+    return false;
+  }
+
+  for (size_t i = 0; i < normalized.length(); ++i) {
+    const char c = normalized.charAt(i);
+    if (c < '0' || c > '9') {
+      return false;
+    }
+  }
+
+  const long parsed = normalized.toInt();
+  if (parsed < 0 || parsed > 100) {
+    return false;
+  }
+
+  *outPercent = static_cast<uint8_t>(parsed);
+  return true;
+}
+
 void showBleKeyboardInput(AppContext &ctx,
                           const std::function<void()> &backgroundTick) {
   const BleStatus bs = ctx.ble->status();
@@ -450,6 +484,7 @@ void runSystemMenu(AppContext &ctx,
       tzLabel = tzLabel.substring(0, 13) + "...";
     }
     menu.push_back(String("UI Language: ") + uiLanguageLabel(currentLang));
+    menu.push_back(displayBrightnessLabel(ctx.config.displayBrightnessPercent));
     menu.push_back(String("Timezone: ") + tzLabel);
     menu.push_back("Sync Timezone (IP)");
     menu.push_back("Factory Reset");
@@ -461,7 +496,7 @@ void runSystemMenu(AppContext &ctx,
                                         backgroundTick,
                                         "OK Select  BACK Exit",
                                         "Runtime config control");
-    if (choice < 0 || choice == 4) {
+    if (choice < 0 || choice == 5) {
       return;
     }
 
@@ -488,6 +523,32 @@ void runSystemMenu(AppContext &ctx,
     }
 
     if (choice == 1) {
+      String brightnessInput = String(
+          static_cast<unsigned long>(ctx.config.displayBrightnessPercent));
+      if (!ctx.uiRuntime->textInput("Brightness (0-100)",
+                                    brightnessInput,
+                                    false,
+                                    backgroundTick)) {
+        continue;
+      }
+
+      uint8_t brightnessPercent = 0;
+      if (!parseBrightnessPercentInput(brightnessInput, &brightnessPercent)) {
+        ctx.uiRuntime->showToast("System",
+                                 "Brightness must be 0~100",
+                                 1400,
+                                 backgroundTick);
+        continue;
+      }
+
+      ctx.config.displayBrightnessPercent = brightnessPercent;
+      ctx.uiRuntime->setDisplayBrightnessPercent(brightnessPercent);
+      markDirty(ctx);
+      saveSettingsConfig(ctx, backgroundTick, "System");
+      continue;
+    }
+
+    if (choice == 2) {
       String tzInput = ctx.config.timezoneTz;
       tzInput.trim();
       if (tzInput.isEmpty()) {
@@ -511,7 +572,7 @@ void runSystemMenu(AppContext &ctx,
       continue;
     }
 
-    if (choice == 2) {
+    if (choice == 3) {
       if (!ctx.wifi->isConnected()) {
         ctx.uiRuntime->showToast("System", "Wi-Fi required for IP timezone", 1600, backgroundTick);
         continue;
@@ -540,6 +601,10 @@ void runSystemMenu(AppContext &ctx,
                                  1600,
                                  backgroundTick);
       }
+      continue;
+    }
+
+    if (choice != 4) {
       continue;
     }
 
@@ -579,6 +644,7 @@ void runSystemMenu(AppContext &ctx,
 
     ctx.uiRuntime->setLanguage(uiLanguageFromConfigCode(ctx.config.uiLanguage));
     ctx.uiRuntime->setTimezone(ctx.config.timezoneTz);
+    ctx.uiRuntime->setDisplayBrightnessPercent(ctx.config.displayBrightnessPercent);
     ctx.uiRuntime->showToast("System", "Factory reset completed", 1600, backgroundTick);
     return;
   }

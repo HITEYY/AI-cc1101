@@ -27,6 +27,7 @@ struct RuntimeConfig {
   String appMarketReleaseAsset;
   String uiLanguage = "en";
   String timezoneTz = "UTC0";
+  uint8_t displayBrightnessPercent = 100;
 };
 
 enum class ConfigLoadSource : uint8_t {

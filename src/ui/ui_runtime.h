@@ -11,6 +11,15 @@ struct UiEvent {
   int delta = 0;
   bool ok = false;
   bool back = false;
+  bool okLong = false;
+};
+
+enum class MessengerAction : uint8_t {
+  Back = 0,
+  Text = 1,
+  Voice = 2,
+  File = 3,
+  TextLong = 4,
 };
 
 class UiRuntime {
@@ -29,6 +38,8 @@ class UiRuntime {
   void setTimezone(const String &tz);
   String timezone() const;
   bool syncTimezoneFromIp(String *resolvedTz = nullptr, String *error = nullptr);
+  void setDisplayBrightnessPercent(uint8_t percent);
+  uint8_t displayBrightnessPercent() const;
 
   int launcherLoop(const String &title,
                    const std::vector<String> &items,
@@ -41,6 +52,10 @@ class UiRuntime {
                const std::function<void()> &backgroundTick,
                const String &footer = "OK Select  BACK Exit",
                const String &subtitle = "");
+
+  MessengerAction messengerHomeLoop(const std::vector<String> &previewLines,
+                                    int selectedIndex,
+                                    const std::function<void()> &backgroundTick);
 
   void showInfo(const String &title,
                 const std::vector<String> &lines,

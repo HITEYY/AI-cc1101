@@ -202,6 +202,7 @@ void setup() {
   Serial.printf("[boot] cfg.uiLanguage=%s\n", gAppContext.config.uiLanguage.c_str());
   gUiRuntime.setLanguage(uiLanguageFromConfigCode(gAppContext.config.uiLanguage));
   gUiRuntime.setTimezone(gAppContext.config.timezoneTz);
+  gUiRuntime.setDisplayBrightnessPercent(gAppContext.config.displayBrightnessPercent);
 
   gWifi.begin();
   gWifi.configure(gAppContext.config);
