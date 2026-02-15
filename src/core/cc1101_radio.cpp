@@ -3,11 +3,11 @@
 #include <ELECHOUSE_CC1101_SRC_DRV.h>
 #include <RCSwitch.h>
 #include <SPI.h>
-#include <TFT_eSPI.h>
 
 #include <cstring>
 
 #include "board_pins.h"
+#include "shared_spi_bus.h"
 #include "user_config.h"
 
 namespace {
@@ -150,10 +150,11 @@ bool initCc1101Radio() {
 
   delay(CC1101_BOOT_SETTLE_MS);
 
-  // UI(TFT_eSPI) already initializes the shared SPI bus on this board.
-  // Reuse TFT_eSPI SPI instance so TFT/CC1101 never fight over matrixed SPI pins.
+  sharedspi::init();
+
+  // Reuse a single shared SPI bus so TFT/SD/CC1101 never fight over matrixed pins.
   ELECHOUSE_cc1101.setBeginEndLogic(false);
-  SPIClass *spiBus = &TFT_eSPI::getSPIinstance();
+  SPIClass *spiBus = sharedspi::bus();
   ELECHOUSE_cc1101.setSPIinstance(spiBus);
   ELECHOUSE_cc1101.setSpiPin(CC1101_SCK_PIN,
                              CC1101_MISO_PIN,

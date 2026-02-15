@@ -6,7 +6,8 @@
 #include "../core/gateway_client.h"
 #include "../core/runtime_config.h"
 #include "../core/wifi_manager.h"
-#include "../ui/ui_shell.h"
+#include "../ui/i18n.h"
+#include "../ui/ui_runtime.h"
 
 namespace {
 
@@ -22,7 +23,7 @@ bool saveSettingsConfig(AppContext &ctx,
     if (validateErr.isEmpty()) {
       validateErr = "Config validation failed";
     }
-    ctx.ui->showToast(toastTitle, validateErr, 1800, backgroundTick);
+    ctx.uiRuntime->showToast(toastTitle, validateErr, 1800, backgroundTick);
     return false;
   }
 
@@ -30,7 +31,7 @@ bool saveSettingsConfig(AppContext &ctx,
   if (!saveConfig(ctx.config, &saveErr)) {
     String message = saveErr.isEmpty() ? String("Failed to save config") : saveErr;
     message += " / previous config kept";
-    ctx.ui->showToast("Save Error", message, 1900, backgroundTick);
+    ctx.uiRuntime->showToast("Save Error", message, 1900, backgroundTick);
     return false;
   }
 
@@ -45,14 +46,14 @@ void requestWifiReconnect(AppContext &ctx,
   if (ctx.config.wifiSsid.isEmpty()) {
     ctx.wifi->disconnect();
     if (showToast) {
-      ctx.ui->showToast("Wi-Fi", "Wi-Fi disconnected", 1200, backgroundTick);
+      ctx.uiRuntime->showToast("Wi-Fi", "Wi-Fi disconnected", 1200, backgroundTick);
     }
     return;
   }
 
   ctx.wifi->connectNow();
   if (showToast) {
-    ctx.ui->showToast("Wi-Fi",
+    ctx.uiRuntime->showToast("Wi-Fi",
                       "Connecting to " + ctx.config.wifiSsid,
                       1500,
                       backgroundTick);
@@ -64,10 +65,10 @@ void editHiddenWifi(AppContext &ctx,
   String ssid = ctx.config.wifiSsid;
   String password = ctx.config.wifiPassword;
 
-  if (!ctx.ui->textInput("Wi-Fi SSID", ssid, false, backgroundTick)) {
+  if (!ctx.uiRuntime->textInput("Wi-Fi SSID", ssid, false, backgroundTick)) {
     return;
   }
-  if (!ctx.ui->textInput("Wi-Fi Password", password, true, backgroundTick)) {
+  if (!ctx.uiRuntime->textInput("Wi-Fi Password", password, true, backgroundTick)) {
     return;
   }
 
@@ -85,7 +86,7 @@ void scanAndSelectWifi(AppContext &ctx,
   if (!ctx.wifi->scanNetworks(ssids, &err)) {
     String message = err.isEmpty() ? String("Wi-Fi scan failed") : err;
     message += " / use Hidden SSID";
-    ctx.ui->showToast("Wi-Fi Scan", message, 1800, backgroundTick);
+    ctx.uiRuntime->showToast("Wi-Fi Scan", message, 1800, backgroundTick);
     return;
   }
 
@@ -94,7 +95,7 @@ void scanAndSelectWifi(AppContext &ctx,
   menu.push_back("Back");
 
   int selected = 0;
-  const int choice = ctx.ui->menuLoop("Wi-Fi Scan",
+  const int choice = ctx.uiRuntime->menuLoop("Wi-Fi Scan",
                                        menu,
                                        selected,
                                        backgroundTick,
@@ -112,7 +113,7 @@ void scanAndSelectWifi(AppContext &ctx,
 
   const String selectedSsid = menu[static_cast<size_t>(choice)];
   String password = ctx.config.wifiPassword;
-  if (!ctx.ui->textInput("Wi-Fi Password", password, true, backgroundTick)) {
+  if (!ctx.uiRuntime->textInput("Wi-Fi Password", password, true, backgroundTick)) {
     return;
   }
 
@@ -140,7 +141,7 @@ void runWifiMenu(AppContext &ctx,
                                 ? String("SSID: (empty)")
                                 : String("SSID: ") + ctx.config.wifiSsid;
 
-    const int choice = ctx.ui->menuLoop("Setting / Wi-Fi",
+    const int choice = ctx.uiRuntime->menuLoop("Setting / Wi-Fi",
                                         menu,
                                         selected,
                                         backgroundTick,
@@ -157,13 +158,13 @@ void runWifiMenu(AppContext &ctx,
       editHiddenWifi(ctx, backgroundTick);
     } else if (choice == 2) {
       if (ctx.config.wifiSsid.isEmpty()) {
-        ctx.ui->showToast("Wi-Fi", "SSID is empty", 1300, backgroundTick);
+        ctx.uiRuntime->showToast("Wi-Fi", "SSID is empty", 1300, backgroundTick);
         continue;
       }
       requestWifiReconnect(ctx, backgroundTick, true);
     } else if (choice == 3) {
       ctx.wifi->disconnect();
-      ctx.ui->showToast("Wi-Fi", "Disconnected", 1200, backgroundTick);
+      ctx.uiRuntime->showToast("Wi-Fi", "Disconnected", 1200, backgroundTick);
     } else if (choice == 4) {
       ctx.config.wifiSsid = "";
       ctx.config.wifiPassword = "";
@@ -234,7 +235,7 @@ void showBleKeyboardInput(AppContext &ctx,
     lines.push_back(bs.pairingHint);
   }
 
-  ctx.ui->showInfo("BLE Keyboard", lines, backgroundTick, "OK/BACK Exit");
+  ctx.uiRuntime->showInfo("BLE Keyboard", lines, backgroundTick, "OK/BACK Exit");
 }
 
 void scanAndConnectBle(AppContext &ctx,
@@ -242,7 +243,7 @@ void scanAndConnectBle(AppContext &ctx,
   std::vector<BleDeviceInfo> devices;
   String err;
   if (!ctx.ble->scanDevices(devices, &err)) {
-    ctx.ui->showToast("BLE Scan",
+    ctx.uiRuntime->showToast("BLE Scan",
                       err.isEmpty() ? String("BLE scan failed") : err,
                       1700,
                       backgroundTick);
@@ -250,7 +251,7 @@ void scanAndConnectBle(AppContext &ctx,
   }
 
   if (devices.empty()) {
-    ctx.ui->showToast("BLE Scan", "No BLE devices found", 1500, backgroundTick);
+    ctx.uiRuntime->showToast("BLE Scan", "No BLE devices found", 1500, backgroundTick);
     return;
   }
 
@@ -280,7 +281,7 @@ void scanAndConnectBle(AppContext &ctx,
   menu.push_back("Back");
 
   int selected = 0;
-  const int choice = ctx.ui->menuLoop("BLE Scan",
+  const int choice = ctx.uiRuntime->menuLoop("BLE Scan",
                                        menu,
                                        selected,
                                        backgroundTick,
@@ -294,7 +295,7 @@ void scanAndConnectBle(AppContext &ctx,
   const BleDeviceInfo &device = devices[static_cast<size_t>(choice)];
   String connectErr;
   if (!ctx.ble->connectToDevice(device.address, device.name, &connectErr)) {
-    ctx.ui->showToast("BLE Connect",
+    ctx.uiRuntime->showToast("BLE Connect",
                       connectErr.isEmpty() ? String("BLE connect failed")
                                            : connectErr,
                       1800,
@@ -308,14 +309,14 @@ void scanAndConnectBle(AppContext &ctx,
 
   const BleStatus status = ctx.ble->status();
   if (status.hidKeyboard) {
-    ctx.ui->showToast("BLE", "Keyboard connected", 1400, backgroundTick);
+    ctx.uiRuntime->showToast("BLE", "Keyboard connected", 1400, backgroundTick);
   } else if (status.likelyAudio) {
-    ctx.ui->showToast("BLE",
+    ctx.uiRuntime->showToast("BLE",
                       "Connected, but audio stream unsupported",
                       1800,
                       backgroundTick);
   } else {
-    ctx.ui->showToast("BLE", "Connected and staged", 1400, backgroundTick);
+    ctx.uiRuntime->showToast("BLE", "Connected and staged", 1400, backgroundTick);
   }
 }
 
@@ -337,7 +338,7 @@ void runBleMenu(AppContext &ctx,
     menu.push_back("Forget Saved");
     menu.push_back("Back");
 
-    const int choice = ctx.ui->menuLoop("Setting / BLE",
+    const int choice = ctx.uiRuntime->menuLoop("Setting / BLE",
                                         menu,
                                         selected,
                                         backgroundTick,
@@ -355,7 +356,7 @@ void runBleMenu(AppContext &ctx,
 
     if (choice == 1) {
       if (ctx.config.bleDeviceAddress.isEmpty()) {
-        ctx.ui->showToast("BLE", "Saved address is empty", 1500, backgroundTick);
+        ctx.uiRuntime->showToast("BLE", "Saved address is empty", 1500, backgroundTick);
         continue;
       }
 
@@ -363,20 +364,20 @@ void runBleMenu(AppContext &ctx,
       if (!ctx.ble->connectToDevice(ctx.config.bleDeviceAddress,
                                     ctx.config.bleDeviceName,
                                     &connectErr)) {
-        ctx.ui->showToast("BLE Connect",
+        ctx.uiRuntime->showToast("BLE Connect",
                           connectErr.isEmpty() ? String("BLE connect failed")
                                                : connectErr,
                           1800,
                           backgroundTick);
       } else {
-        ctx.ui->showToast("BLE", "Connected", 1200, backgroundTick);
+        ctx.uiRuntime->showToast("BLE", "Connected", 1200, backgroundTick);
       }
       continue;
     }
 
     if (choice == 2) {
       ctx.ble->disconnectNow();
-      ctx.ui->showToast("BLE", "Disconnected", 1200, backgroundTick);
+      ctx.uiRuntime->showToast("BLE", "Disconnected", 1200, backgroundTick);
       continue;
     }
 
@@ -387,13 +388,13 @@ void runBleMenu(AppContext &ctx,
 
     if (choice == 4) {
       ctx.ble->clearKeyboardInput();
-      ctx.ui->showToast("BLE", "Keyboard input cleared", 1200, backgroundTick);
+      ctx.uiRuntime->showToast("BLE", "Keyboard input cleared", 1200, backgroundTick);
       continue;
     }
 
     if (choice == 5) {
       String address = ctx.config.bleDeviceAddress;
-      if (ctx.ui->textInput("BLE Address", address, false, backgroundTick)) {
+      if (ctx.uiRuntime->textInput("BLE Address", address, false, backgroundTick)) {
         address.toUpperCase();
         ctx.config.bleDeviceAddress = address;
         markDirty(ctx);
@@ -403,7 +404,7 @@ void runBleMenu(AppContext &ctx,
 
     if (choice == 6) {
       String name = ctx.config.bleDeviceName;
-      if (ctx.ui->textInput("BLE Name", name, false, backgroundTick)) {
+      if (ctx.uiRuntime->textInput("BLE Name", name, false, backgroundTick)) {
         ctx.config.bleDeviceName = name;
         markDirty(ctx);
       }
@@ -413,7 +414,7 @@ void runBleMenu(AppContext &ctx,
     if (choice == 7) {
       ctx.config.bleAutoConnect = !ctx.config.bleAutoConnect;
       markDirty(ctx);
-      ctx.ui->showToast("BLE",
+      ctx.uiRuntime->showToast("BLE",
                         ctx.config.bleAutoConnect ? "Auto connect enabled"
                                                   : "Auto connect disabled",
                         1300,
@@ -427,7 +428,7 @@ void runBleMenu(AppContext &ctx,
       ctx.config.bleAutoConnect = false;
       ctx.ble->disconnectNow();
       markDirty(ctx);
-      ctx.ui->showToast("BLE", "Saved BLE device cleared", 1400, backgroundTick);
+      ctx.uiRuntime->showToast("BLE", "Saved BLE device cleared", 1400, backgroundTick);
       continue;
     }
   }
@@ -439,20 +440,44 @@ void runSystemMenu(AppContext &ctx,
 
   while (true) {
     std::vector<String> menu;
+    const UiLanguage currentLang = uiLanguageFromConfigCode(ctx.config.uiLanguage);
+    menu.push_back(String("UI Language: ") + uiLanguageLabel(currentLang));
     menu.push_back("Factory Reset");
     menu.push_back("Back");
 
-    const int choice = ctx.ui->menuLoop("Setting / System",
+    const int choice = ctx.uiRuntime->menuLoop("Setting / System",
                                         menu,
                                         selected,
                                         backgroundTick,
                                         "OK Select  BACK Exit",
                                         "Runtime config control");
-    if (choice < 0 || choice == 1) {
+    if (choice < 0 || choice == 2) {
       return;
     }
 
-    if (!ctx.ui->confirm("Factory Reset",
+    if (choice == 0) {
+      std::vector<String> langItems;
+      langItems.push_back("English");
+      langItems.push_back("Korean");
+      langItems.push_back("Back");
+
+      const int langIndex = ctx.uiRuntime->menuLoop("UI Language",
+                                                    langItems,
+                                                    currentLang == UiLanguage::Korean ? 1 : 0,
+                                                    backgroundTick,
+                                                    "OK Select  BACK Exit",
+                                                    "Language toggle");
+      if (langIndex >= 0 && langIndex <= 1) {
+        const UiLanguage nextLang = langIndex == 1 ? UiLanguage::Korean : UiLanguage::English;
+        ctx.config.uiLanguage = uiLanguageCode(nextLang);
+        ctx.uiRuntime->setLanguage(nextLang);
+        markDirty(ctx);
+        saveSettingsConfig(ctx, backgroundTick, "System");
+      }
+      continue;
+    }
+
+    if (!ctx.uiRuntime->confirm("Factory Reset",
                          "Delete Wi-Fi/Gateway config?",
                          backgroundTick,
                          "Yes",
@@ -460,7 +485,7 @@ void runSystemMenu(AppContext &ctx,
       continue;
     }
 
-    if (!ctx.ui->confirm("Confirm Again",
+    if (!ctx.uiRuntime->confirm("Confirm Again",
                          "This cannot be undone",
                          backgroundTick,
                          "Reset",
@@ -470,7 +495,7 @@ void runSystemMenu(AppContext &ctx,
 
     String resetErr;
     if (!resetConfig(&resetErr)) {
-      ctx.ui->showToast("Reset Error", resetErr, 1600, backgroundTick);
+      ctx.uiRuntime->showToast("Reset Error", resetErr, 1600, backgroundTick);
       continue;
     }
 
@@ -486,7 +511,8 @@ void runSystemMenu(AppContext &ctx,
     ctx.ble->disconnectNow();
     ctx.ble->configure(ctx.config);
 
-    ctx.ui->showToast("System", "Factory reset completed", 1600, backgroundTick);
+    ctx.uiRuntime->setLanguage(uiLanguageFromConfigCode(ctx.config.uiLanguage));
+    ctx.uiRuntime->showToast("System", "Factory reset completed", 1600, backgroundTick);
     return;
   }
 }
@@ -505,7 +531,7 @@ void runSettingsApp(AppContext &ctx,
     menu.push_back("Back");
 
     const String subtitle = ctx.configDirty ? "Unsaved changes" : "Saved";
-    const int choice = ctx.ui->menuLoop("Setting",
+    const int choice = ctx.uiRuntime->menuLoop("Setting",
                                         menu,
                                         selected,
                                         backgroundTick,

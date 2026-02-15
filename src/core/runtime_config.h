@@ -25,6 +25,7 @@ struct RuntimeConfig {
   bool bleAutoConnect = false;
   String appMarketGithubRepo;
   String appMarketReleaseAsset;
+  String uiLanguage = "en";
 };
 
 enum class ConfigLoadSource : uint8_t {

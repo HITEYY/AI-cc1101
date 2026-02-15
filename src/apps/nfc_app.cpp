@@ -4,7 +4,7 @@
 
 #include <vector>
 
-#include "../ui/ui_shell.h"
+#include "../ui/ui_runtime.h"
 #include "user_config.h"
 
 #if __has_include(<Adafruit_PN532.h>)
@@ -80,7 +80,7 @@ void showNfcInfo(AppContext &ctx,
   if (!ensureNfcReady(&err)) {
     lines.push_back("State: Missing");
     lines.push_back(err.isEmpty() ? String("Check wiring/power") : err);
-    ctx.ui->showInfo("NFC", lines, backgroundTick, "OK/BACK Exit");
+    ctx.uiRuntime->showInfo("NFC", lines, backgroundTick, "OK/BACK Exit");
     return;
   }
 
@@ -90,21 +90,21 @@ void showNfcInfo(AppContext &ctx,
   lines.push_back("State: Ready");
   lines.push_back("IC: " + String(ic, HEX));
   lines.push_back("FW: " + String(ver) + "." + String(rev));
-  ctx.ui->showInfo("NFC", lines, backgroundTick, "OK/BACK Exit");
+  ctx.uiRuntime->showInfo("NFC", lines, backgroundTick, "OK/BACK Exit");
 }
 
 void scanNfcTag(AppContext &ctx,
                 const std::function<void()> &backgroundTick) {
   String err;
   if (!ensureNfcReady(&err)) {
-    ctx.ui->showToast("NFC",
+    ctx.uiRuntime->showToast("NFC",
                       err.isEmpty() ? String("PN532 not ready") : err,
                       1700,
                       backgroundTick);
     return;
   }
 
-  ctx.ui->showToast("NFC", "Hold tag near antenna", 900, backgroundTick);
+  ctx.uiRuntime->showToast("NFC", "Hold tag near antenna", 900, backgroundTick);
 
   uint8_t uid[10] = {0};
   uint8_t uidLength = 0;
@@ -113,7 +113,7 @@ void scanNfcTag(AppContext &ctx,
                                              &uidLength,
                                              200);
   if (!ok || uidLength == 0) {
-    ctx.ui->showToast("NFC", "No tag detected", 1200, backgroundTick);
+    ctx.uiRuntime->showToast("NFC", "No tag detected", 1200, backgroundTick);
     return;
   }
 
@@ -122,7 +122,7 @@ void scanNfcTag(AppContext &ctx,
   lines.push_back("UID Len: " + String(uidLength));
   lines.push_back("UID: " + bytesToHex(uid, uidLength));
 
-  ctx.ui->showInfo("NFC Tag", lines, backgroundTick, "OK/BACK Exit");
+  ctx.uiRuntime->showInfo("NFC Tag", lines, backgroundTick, "OK/BACK Exit");
 }
 #endif
 
@@ -138,7 +138,7 @@ void runNfcApp(AppContext &ctx,
     menu.push_back("Scan Tag UID");
     menu.push_back("Back");
 
-    const int choice = ctx.ui->menuLoop("NFC",
+    const int choice = ctx.uiRuntime->menuLoop("NFC",
                                         menu,
                                         selected,
                                         backgroundTick,
@@ -158,7 +158,7 @@ void runNfcApp(AppContext &ctx,
     }
 #else
     (void)choice;
-    ctx.ui->showToast("NFC",
+    ctx.uiRuntime->showToast("NFC",
                       "Adafruit_PN532 library missing",
                       1800,
                       backgroundTick);

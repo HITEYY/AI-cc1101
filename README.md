@@ -2,7 +2,7 @@
 
 LilyGo T-Embed CC1101 보드를 OpenClaw Remote Gateway에 `node`로 연결하는 펌웨어입니다.
 
-이 버전은 런타임 앱 구조를 사용합니다.
+이 버전은 **LVGL 기반 런타임 UI 구조**를 사용합니다.
 
 - `OpenClaw` 앱: 상태 확인 + Gateway 설정 + Messenger(채팅/파일/음성) + Save & Apply + Connect/Disconnect/Reconnect
 - `Setting` 앱: Wi-Fi 설정 + BLE 스캔/연결/저장(재접속 대상) + System(Factory Reset)
@@ -50,16 +50,45 @@ LilyGo T-Embed CC1101 보드를 OpenClaw Remote Gateway에 `node`로 연결하�
   - `OpenClaw -> Messenger -> Record Voice (MIC/BLE) -> MIC (Device)`
   - 녹음된 파일은 SD에 `.wav`로 저장 후 `msg.voice.meta/chunk`로 전송
 
+## LVGL UI 아키텍처
+
+- 디스플레이 백엔드: `TFT_eSPI` 유지 + 상위 렌더링 계층만 `LVGL` 적용
+- UI 테마: 다크 운영형, 최소 모션(짧은 전환 시간)
+- 언어 정책: `English` 기본, `English/Korean` 토글 지원
+- 입력 장치: 터치 미사용, 엔코더 + 버튼 전용
+- 라우팅: 런처 중심 앱 내비게이션 (`UiNavigator`)
+- UI 런타임: 공통 화면/입력/토스트/텍스트 입력 (`UiRuntime`)
+- SPI 버스: TFT/SD/CC1101 공용 SPI 초기화/접근 계층(`shared_spi_bus`) 사용
+
+### 입력 조작
+
+- 엔코더 회전: 항목 이동
+- `OK` 짧게: 선택/엔터 (`ENTER`)
+- `BACK` 또는 `OK` 길게: 취소/뒤로 (`ESC`)
+- 상단 버튼 3초 홀드: deep sleep 진입 (기존 동작 유지)
+
+### 언어 설정
+
+- 경로: `Setting -> System -> UI Language`
+- 선택값: `English`, `Korean`
+- 저장: 설정 저장 시 SD(`/oc_cfg.json`) + NVS 백업 반영
+- 재부팅 후 유지: `uiLanguage` 필드(`en`/`ko`)로 영속화
+
 ## 프로젝트 구조
 
 - `src/core/runtime_config.*`: 설정 로드/저장/검증/초기화
 - `src/core/gateway_client.*`: WS 연결/핸드셰이크/이벤트
 - `src/core/node_command_handler.*`: invoke 명령 라우팅
 - `src/core/cc1101_radio.*`: CC1101 제어
+- `src/core/shared_spi_bus.*`: TFT/SD/CC1101 공용 SPI 버스 관리
 - `src/core/wifi_manager.*`: Wi-Fi 연결/스캔
 - `src/core/ble_manager.*`: BLE 스캔/연결/상태
 - `src/core/audio_recorder.*`: MIC(ADC) WAV 녹음
-- `src/ui/ui_shell.*`: TFT/엔코더 UI 공통
+- `src/ui/lvgl_port.*`: LVGL 포팅 계층(TFT flush, draw buffer, tick pump)
+- `src/ui/input_adapter.*`: 엔코더/버튼 -> LVGL indev 어댑터
+- `src/ui/ui_runtime.*`: 공통 UI 런타임(메뉴/정보/확인/입력/토스트)
+- `src/ui/ui_navigator.*`: 런처 라우팅/앱 진입
+- `src/ui/i18n.*`: 다국어 문자열 리소스(en/ko)
 - `src/apps/openclaw_app.*`: OpenClaw 앱
 - `src/apps/settings_app.*`: Setting 앱
 - `src/apps/file_explorer_app.*`: File Explorer 앱
@@ -156,8 +185,9 @@ pio device monitor -b 115200
 - `Keyboard Input View`, `Clear Keyboard Input`
 - `Edit Device Addr/Name`, `Auto Connect`, `Forget Saved`
 
-6. `Setting -> System -> Factory Reset`
-- 2단계 확인 후 SD 설정 파일 + NVS 백업 설정 삭제
+6. `Setting -> System`
+- `UI Language`: `English/Korean` 전환
+- `Factory Reset`: 2단계 확인 후 SD 설정 파일 + NVS 백업 설정 삭제
 
 ## APPMarket 사용
 
@@ -182,6 +212,13 @@ pio device monitor -b 115200
 - 이 펌웨어의 BLE 연결은 **BLE GATT 중앙(Central) 연결**입니다.
 - BLE HID 키보드는 입력 수신까지 지원합니다.
 - 이어폰/마이크/스피커는 연결 시도는 가능하지만, 오디오 스트리밍(A2DP/HFP/LE Audio)은 지원하지 않습니다.
+
+## 성능 참고값
+
+아래 값은 `t-embed-cc1101` 릴리스 빌드 기준 참고치입니다.
+
+- RAM: 약 `40.6%` (`132,964 / 327,680 bytes`)
+- Flash: 약 `32.0%` (`2,099,827 / 6,553,600 bytes`)
 
 ## OpenClaw 테스트
 

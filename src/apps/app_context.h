@@ -7,7 +7,8 @@
 class WifiManager;
 class GatewayClient;
 class BleManager;
-class UIShell;
+class UiRuntime;
+class UiNavigator;
 
 enum class AppId : uint8_t {
   OpenClaw = 0,
@@ -25,6 +26,7 @@ struct AppContext {
   WifiManager *wifi = nullptr;
   GatewayClient *gateway = nullptr;
   BleManager *ble = nullptr;
-  UIShell *ui = nullptr;
+  UiRuntime *uiRuntime = nullptr;
+  UiNavigator *uiNav = nullptr;
   bool configDirty = false;
 };

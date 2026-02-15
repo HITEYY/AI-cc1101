@@ -8,17 +8,7 @@
 #define XPOWERS_CHIP_BQ25896
 #include <XPowersLib.h>
 
-#include <vector>
-
-#include "apps/app_market_app.h"
 #include "apps/app_context.h"
-#include "apps/file_explorer_app.h"
-#include "apps/nfc_app.h"
-#include "apps/nrf24_app.h"
-#include "apps/openclaw_app.h"
-#include "apps/rf_app.h"
-#include "apps/rfid_app.h"
-#include "apps/settings_app.h"
 #include "core/cc1101_radio.h"
 #include "core/ble_manager.h"
 #include "core/board_pins.h"
@@ -26,11 +16,14 @@
 #include "core/node_command_handler.h"
 #include "core/runtime_config.h"
 #include "core/wifi_manager.h"
-#include "ui/ui_shell.h"
+#include "ui/i18n.h"
+#include "ui/ui_navigator.h"
+#include "ui/ui_runtime.h"
 
 namespace {
 
-UIShell gUi;
+UiRuntime gUiRuntime;
+UiNavigator gUiNav;
 WifiManager gWifi;
 GatewayClient gGateway;
 BleManager gBle;
@@ -127,23 +120,7 @@ void runBackgroundTick() {
   gWifi.tick();
   gGateway.tick();
   gBle.tick();
-}
-
-String buildLauncherStatus() {
-  String line;
-  line += gWifi.isConnected() ? "WiFi:UP " : "WiFi:DOWN ";
-
-  const GatewayStatus gs = gGateway.status();
-  line += "GW:";
-  line += gs.gatewayReady ? "READY" : (gs.wsConnected ? "WS" : "IDLE");
-  line += " BLE:";
-  line += gBle.isConnected() ? "CONN" : "IDLE";
-
-  if (gAppContext.configDirty) {
-    line += "  *DIRTY";
-  }
-
-  return line;
+  gUiRuntime.tick();
 }
 
 void configureGatewayCallbacks() {
@@ -180,50 +157,6 @@ void initBoardPower() {
   }
 }
 
-void runLauncher() {
-  static int selected = 0;
-
-  std::vector<String> items;
-  items.push_back("OpenClaw");
-  items.push_back("Setting");
-  items.push_back("File Explorer");
-  items.push_back("APPMarket");
-  items.push_back("RF");
-  items.push_back("NFC");
-  items.push_back("RFID");
-  items.push_back("NRF24");
-
-  gUi.setStatusLine(buildLauncherStatus());
-  const int choice = gUi.menuLoop("Launcher",
-                                  items,
-                                  selected,
-                                  runBackgroundTick,
-                                  "OK Select",
-                                  "T-Embed CC1101");
-  if (choice < 0) {
-    return;
-  }
-
-  selected = choice;
-  if (choice == 0) {
-    runOpenClawApp(gAppContext, runBackgroundTick);
-  } else if (choice == 1) {
-    runSettingsApp(gAppContext, runBackgroundTick);
-  } else if (choice == 2) {
-    runFileExplorerApp(gAppContext, runBackgroundTick);
-  } else if (choice == 3) {
-    runAppMarketApp(gAppContext, runBackgroundTick);
-  } else if (choice == 4) {
-    runRfApp(gAppContext, runBackgroundTick);
-  } else if (choice == 5) {
-    runNfcApp(gAppContext, runBackgroundTick);
-  } else if (choice == 6) {
-    runRfidApp(gAppContext, runBackgroundTick);
-  } else if (choice == 7) {
-    runNrf24App(gAppContext, runBackgroundTick);
-  }
-}
-
 }  // namespace
 
 void setup() {
@@ -247,13 +180,13 @@ void setup() {
   initBoardPower();
 
   Serial.println("[boot] ui.begin()");
-  gUi.begin();
+  gUiRuntime.begin();
   gSleepDetectionArmed = digitalRead(boardpins::kEncoderBack) == HIGH;
 
   Serial.println("[boot] cc1101.init()");
   const bool ccReady = initCc1101Radio();
   if (!ccReady) {
-    gUi.showToast("CC1101", "CC1101 not detected", 1500, []() {});
+    gUiRuntime.showToast("CC1101", "CC1101 not detected", 1500, []() {});
   }
   Serial.println(ccReady ? "[boot] cc1101 ready" : "[boot] cc1101 missing");
 
@@ -262,6 +195,7 @@ void setup() {
   if (!loadConfig(gAppContext.config, &configLoadSource, nullptr, &loadErr)) {
     gAppContext.config = makeDefaultConfig();
   }
+  gUiRuntime.setLanguage(uiLanguageFromConfigCode(gAppContext.config.uiLanguage));
 
   gWifi.begin();
   gWifi.configure(gAppContext.config);
@@ -278,7 +212,8 @@ void setup() {
   gAppContext.wifi = &gWifi;
   gAppContext.gateway = &gGateway;
   gAppContext.ble = &gBle;
-  gAppContext.ui = &gUi;
+  gAppContext.uiRuntime = &gUiRuntime;
+  gAppContext.uiNav = &gUiNav;
   gAppContext.configDirty = false;
 
   if (gAppContext.config.autoConnect &&
@@ -295,16 +230,16 @@ void setup() {
   }
 
   if (!loadErr.isEmpty()) {
-    gUi.showToast("Config", loadErr, 1800, runBackgroundTick);
+    gUiRuntime.showToast("Config", loadErr, 1800, runBackgroundTick);
   } else if (configLoadSource == ConfigLoadSource::SdCard) {
-    gUi.showToast("Config", "Loaded from SD", 900, runBackgroundTick);
+    gUiRuntime.showToast("Config", "Loaded from SD", 900, runBackgroundTick);
   } else if (configLoadSource == ConfigLoadSource::Nvs) {
-    gUi.showToast("Config", "Loaded from NVS", 900, runBackgroundTick);
+    gUiRuntime.showToast("Config", "Loaded from NVS", 900, runBackgroundTick);
   } else {
-    gUi.showToast("Config", "Using default seeds", 900, runBackgroundTick);
+    gUiRuntime.showToast("Config", "Using default seeds", 900, runBackgroundTick);
   }
 }
 
 void loop() {
-  runLauncher();
+  gUiNav.runLauncher(gAppContext, runBackgroundTick);
 }

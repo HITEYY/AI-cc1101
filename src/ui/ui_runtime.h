@@ -5,20 +5,26 @@
 #include <functional>
 #include <vector>
 
+#include "i18n.h"
+
 struct UiEvent {
   int delta = 0;
   bool ok = false;
   bool back = false;
 };
 
-class UIShell {
+class UiRuntime {
  public:
-  UIShell();
+  UiRuntime();
 
   void begin();
+  void tick();
   UiEvent pollInput();
 
   void setStatusLine(const String &line);
+
+  void setLanguage(UiLanguage language);
+  UiLanguage language() const;
 
   int menuLoop(const String &title,
                const std::vector<String> &items,
@@ -42,6 +48,11 @@ class UIShell {
                  String &inOutValue,
                  bool mask,
                  const std::function<void()> &backgroundTick);
+
+  void showProgressOverlay(const String &title,
+                           const String &message,
+                           int percent = -1);
+  void hideProgressOverlay();
 
   void showToast(const String &title,
                  const String &message,

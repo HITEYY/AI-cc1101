@@ -2,13 +2,13 @@
 
 #include <SD.h>
 #include <SPI.h>
-#include <TFT_eSPI.h>
 
 #include <algorithm>
 #include <vector>
 
 #include "../core/board_pins.h"
-#include "../ui/ui_shell.h"
+#include "../core/shared_spi_bus.h"
+#include "../ui/ui_runtime.h"
 
 namespace {
 
@@ -112,7 +112,7 @@ bool ensureSdMounted(bool forceMount, String *error) {
   pinMode(boardpins::kSdCs, OUTPUT);
   digitalWrite(boardpins::kSdCs, HIGH);
 
-  SPIClass *spiBus = &TFT_eSPI::getSPIinstance();
+  SPIClass *spiBus = sharedspi::bus();
   const bool mounted = SD.begin(boardpins::kSdCs,
                                 *spiBus,
                                 25000000,
@@ -186,7 +186,7 @@ void showSdInfo(AppContext &ctx,
                 const std::function<void()> &backgroundTick) {
   String err;
   if (!ensureSdMounted(false, &err)) {
-    ctx.ui->showToast("SD Card",
+    ctx.uiRuntime->showToast("SD Card",
                       err.isEmpty() ? String("Mount failed") : err,
                       1800,
                       backgroundTick);
@@ -207,7 +207,7 @@ void showSdInfo(AppContext &ctx,
   lines.push_back("FS Free: " + formatBytes(freeBytes));
   lines.push_back("Mount Point: /sd");
 
-  ctx.ui->showInfo("SD Card Info", lines, backgroundTick, "OK/BACK Exit");
+  ctx.uiRuntime->showInfo("SD Card Info", lines, backgroundTick, "OK/BACK Exit");
 }
 
 String sanitizeTextLine(const String &input) {
@@ -232,7 +232,7 @@ void showFileInfo(AppContext &ctx,
   lines.push_back("Path: " + entry.fullPath);
   lines.push_back("Type: " + String(entry.isDirectory ? "Directory" : "File"));
   lines.push_back("Size: " + formatBytes(entry.size));
-  ctx.ui->showInfo("File Info", lines, backgroundTick, "OK/BACK Exit");
+  ctx.uiRuntime->showInfo("File Info", lines, backgroundTick, "OK/BACK Exit");
 }
 
 void previewTextFile(AppContext &ctx,
@@ -243,7 +243,7 @@ void previewTextFile(AppContext &ctx,
     if (file) {
       file.close();
     }
-    ctx.ui->showToast("Preview", "File open failed", 1500, backgroundTick);
+    ctx.uiRuntime->showToast("Preview", "File open failed", 1500, backgroundTick);
     return;
   }
 
@@ -277,7 +277,7 @@ void previewTextFile(AppContext &ctx,
 
   file.close();
 
-  ctx.ui->showInfo("File Preview", lines, backgroundTick, "OK/BACK Exit");
+  ctx.uiRuntime->showInfo("File Preview", lines, backgroundTick, "OK/BACK Exit");
 }
 
 void runFileMenu(AppContext &ctx,
@@ -292,7 +292,7 @@ void runFileMenu(AppContext &ctx,
     menu.push_back("Back");
 
     const String subtitle = trimMiddle(baseName(entry.fullPath), 24);
-    const int choice = ctx.ui->menuLoop("File",
+    const int choice = ctx.uiRuntime->menuLoop("File",
                                         menu,
                                         selected,
                                         backgroundTick,
@@ -405,14 +405,14 @@ void formatSdCard(AppContext &ctx,
                   const std::function<void()> &backgroundTick) {
   String err;
   if (!ensureSdMounted(false, &err)) {
-    ctx.ui->showToast("SD Card",
+    ctx.uiRuntime->showToast("SD Card",
                       err.isEmpty() ? String("Mount failed") : err,
                       1800,
                       backgroundTick);
     return;
   }
 
-  if (!ctx.ui->confirm("Format SD",
+  if (!ctx.uiRuntime->confirm("Format SD",
                        "Quick format: delete all files?",
                        backgroundTick,
                        "Format",
@@ -420,7 +420,7 @@ void formatSdCard(AppContext &ctx,
     return;
   }
 
-  if (!ctx.ui->confirm("Confirm Again",
+  if (!ctx.uiRuntime->confirm("Confirm Again",
                        "This cannot be undone",
                        backgroundTick,
                        "Format",
@@ -429,21 +429,21 @@ void formatSdCard(AppContext &ctx,
   }
 
   if (!quickFormatSd(backgroundTick, &err)) {
-    ctx.ui->showToast("SD Format",
+    ctx.uiRuntime->showToast("SD Format",
                       err.isEmpty() ? String("Format failed") : err,
                       2000,
                       backgroundTick);
     return;
   }
 
-  ctx.ui->showToast("SD Format", "Quick format completed", 1600, backgroundTick);
+  ctx.uiRuntime->showToast("SD Format", "Quick format completed", 1600, backgroundTick);
 }
 
 void browseSd(AppContext &ctx,
               const std::function<void()> &backgroundTick) {
   String err;
   if (!ensureSdMounted(false, &err)) {
-    ctx.ui->showToast("SD Card",
+    ctx.uiRuntime->showToast("SD Card",
                       err.isEmpty() ? String("Mount failed") : err,
                       1800,
                       backgroundTick);
@@ -456,7 +456,7 @@ void browseSd(AppContext &ctx,
   while (true) {
     std::vector<FsEntry> entries;
     if (!listDirectory(currentPath, entries, &err)) {
-      ctx.ui->showToast("Explorer",
+      ctx.uiRuntime->showToast("Explorer",
                         err.isEmpty() ? String("Read failed") : err,
                         1700,
                         backgroundTick);
@@ -478,7 +478,7 @@ void browseSd(AppContext &ctx,
     menu.push_back("Back");
 
     const String subtitle = "Path: " + trimMiddle(currentPath, 23);
-    const int choice = ctx.ui->menuLoop("File Explorer",
+    const int choice = ctx.uiRuntime->menuLoop("File Explorer",
                                         menu,
                                         selected,
                                         backgroundTick,
@@ -538,7 +538,7 @@ void runFileExplorerApp(AppContext &ctx,
     menu.push_back("Back");
 
     const String subtitle = gSdMounted ? "SD: Mounted" : "SD: Not mounted";
-    const int choice = ctx.ui->menuLoop("File Explorer",
+    const int choice = ctx.uiRuntime->menuLoop("File Explorer",
                                         menu,
                                         selected,
                                         backgroundTick,
@@ -559,9 +559,9 @@ void runFileExplorerApp(AppContext &ctx,
     } else if (choice == 3) {
       String err;
       if (ensureSdMounted(true, &err)) {
-        ctx.ui->showToast("SD Card", "Mounted", 1200, backgroundTick);
+        ctx.uiRuntime->showToast("SD Card", "Mounted", 1200, backgroundTick);
       } else {
-        ctx.ui->showToast("SD Card",
+        ctx.uiRuntime->showToast("SD Card",
                           err.isEmpty() ? String("Mount failed") : err,
                           1800,
                           backgroundTick);

@@ -7,7 +7,7 @@
 #include <TFT_eSPI.h>
 
 #include "../core/board_pins.h"
-#include "../ui/ui_shell.h"
+#include "../ui/ui_runtime.h"
 #include "user_config.h"
 
 #if __has_include(<MFRC522.h>)
@@ -112,27 +112,27 @@ void showRfidInfo(AppContext &ctx,
   if (!ensureRfidReady(&err)) {
     lines.push_back("State: Missing");
     lines.push_back(err.isEmpty() ? String("Check wiring/power") : err);
-    ctx.ui->showInfo("RFID", lines, backgroundTick, "OK/BACK Exit");
+    ctx.uiRuntime->showInfo("RFID", lines, backgroundTick, "OK/BACK Exit");
     return;
   }
 
   lines.push_back("State: Ready");
   lines.push_back("Version: " + versionLabel(gVersionReg));
-  ctx.ui->showInfo("RFID", lines, backgroundTick, "OK/BACK Exit");
+  ctx.uiRuntime->showInfo("RFID", lines, backgroundTick, "OK/BACK Exit");
 }
 
 void scanRfidTag(AppContext &ctx,
                  const std::function<void()> &backgroundTick) {
   String err;
   if (!ensureRfidReady(&err)) {
-    ctx.ui->showToast("RFID",
+    ctx.uiRuntime->showToast("RFID",
                       err.isEmpty() ? String("RC522 not ready") : err,
                       1700,
                       backgroundTick);
     return;
   }
 
-  ctx.ui->showToast("RFID", "Tap MIFARE card", 900, backgroundTick);
+  ctx.uiRuntime->showToast("RFID", "Tap MIFARE card", 900, backgroundTick);
 
   gRfid.uid.size = 0;
   const unsigned long started = millis();
@@ -147,7 +147,7 @@ void scanRfidTag(AppContext &ctx,
   }
 
   if (!gRfid.uid.size) {
-    ctx.ui->showToast("RFID", "No card detected", 1200, backgroundTick);
+    ctx.uiRuntime->showToast("RFID", "No card detected", 1200, backgroundTick);
     return;
   }
 
@@ -163,7 +163,7 @@ void scanRfidTag(AppContext &ctx,
   gRfid.PICC_HaltA();
   gRfid.PCD_StopCrypto1();
 
-  ctx.ui->showInfo("RFID Tag", lines, backgroundTick, "OK/BACK Exit");
+  ctx.uiRuntime->showInfo("RFID Tag", lines, backgroundTick, "OK/BACK Exit");
 }
 #endif
 
@@ -179,7 +179,7 @@ void runRfidApp(AppContext &ctx,
     menu.push_back("Scan Card UID");
     menu.push_back("Back");
 
-    const int choice = ctx.ui->menuLoop("RFID",
+    const int choice = ctx.uiRuntime->menuLoop("RFID",
                                         menu,
                                         selected,
                                         backgroundTick,
@@ -199,7 +199,7 @@ void runRfidApp(AppContext &ctx,
     }
 #else
     (void)choice;
-    ctx.ui->showToast("RFID",
+    ctx.uiRuntime->showToast("RFID",
                       "MFRC522 library missing",
                       1800,
                       backgroundTick);

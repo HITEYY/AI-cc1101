@@ -4,9 +4,9 @@
 #include <Preferences.h>
 #include <SD.h>
 #include <SPI.h>
-#include <TFT_eSPI.h>
 
 #include "board_pins.h"
+#include "shared_spi_bus.h"
 #include "user_config.h"
 
 namespace {
@@ -272,7 +272,7 @@ bool mountSd(String *reason) {
   pinMode(boardpins::kSdCs, OUTPUT);
   digitalWrite(boardpins::kSdCs, HIGH);
 
-  SPIClass *spiBus = &TFT_eSPI::getSPIinstance();
+  SPIClass *spiBus = sharedspi::bus();
   const bool mounted = SD.begin(boardpins::kSdCs,
                                 *spiBus,
                                 kSdSpiFrequencyHz,
@@ -483,6 +483,18 @@ bool isValidGithubRepoSlug(const String &repoSlug) {
   return true;
 }
 
+bool isValidUiLanguageCode(const String &langCode) {
+  if (langCode.isEmpty()) {
+    return true;
+  }
+
+  String normalized = langCode;
+  normalized.trim();
+  normalized.toLowerCase();
+
+  return normalized == "en" || normalized == "ko";
+}
+
 GatewayAuthMode sanitizeAuthMode(int mode) {
   return mode == 1 ? GatewayAuthMode::Password : GatewayAuthMode::Token;
 }
@@ -505,6 +517,7 @@ void toJson(const RuntimeConfig &config, JsonObject obj) {
   obj["bleAutoConnect"] = config.bleAutoConnect;
   obj["appMarketGithubRepo"] = config.appMarketGithubRepo;
   obj["appMarketReleaseAsset"] = config.appMarketReleaseAsset;
+  obj["uiLanguage"] = config.uiLanguage;
 }
 
 void fromJson(const JsonObjectConst &obj, RuntimeConfig &config) {
@@ -533,6 +546,7 @@ void fromJson(const JsonObjectConst &obj, RuntimeConfig &config) {
   config.appMarketReleaseAsset =
       String(static_cast<const char *>(obj["appMarketReleaseAsset"] |
                                        USER_APPMARKET_RELEASE_ASSET));
+  config.uiLanguage = String(static_cast<const char *>(obj["uiLanguage"] | "en"));
 }
 
 }  // namespace
@@ -571,6 +585,7 @@ RuntimeConfig makeDefaultConfig() {
   if (!isPlaceholder(USER_APPMARKET_RELEASE_ASSET)) {
     config.appMarketReleaseAsset = USER_APPMARKET_RELEASE_ASSET;
   }
+  config.uiLanguage = "en";
 
   return config;
 }
@@ -619,6 +634,13 @@ bool validateConfig(const RuntimeConfig &config, String *error) {
   if (!isValidGithubRepoSlug(config.appMarketGithubRepo)) {
     if (error) {
       *error = "APPMarket GitHub repo must be owner/repo";
+    }
+    return false;
+  }
+
+  if (!isValidUiLanguageCode(config.uiLanguage)) {
+    if (error) {
+      *error = "UI language must be en or ko";
     }
     return false;
   }

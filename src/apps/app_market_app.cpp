@@ -4,7 +4,6 @@
 #include <HTTPClient.h>
 #include <SD.h>
 #include <SPI.h>
-#include <TFT_eSPI.h>
 #include <Update.h>
 #include <WiFi.h>
 #include <WiFiClient.h>
@@ -18,7 +17,8 @@
 
 #include "../core/board_pins.h"
 #include "../core/runtime_config.h"
-#include "../ui/ui_shell.h"
+#include "../core/shared_spi_bus.h"
+#include "../ui/ui_runtime.h"
 
 namespace {
 
@@ -43,6 +43,42 @@ struct FsEntry {
 };
 
 bool gSdMountedForMarket = false;
+
+class OverlayScope {
+ public:
+  OverlayScope(UiRuntime *ui, const String &title, const String &message, int percent = -1)
+      : ui_(ui) {
+    if (ui_) {
+      ui_->showProgressOverlay(title, message, percent);
+      lastUpdateMs_ = millis();
+    }
+  }
+
+  ~OverlayScope() {
+    if (ui_) {
+      ui_->hideProgressOverlay();
+    }
+  }
+
+  void update(const String &title,
+              const String &message,
+              int percent = -1,
+              bool force = false) {
+    if (!ui_) {
+      return;
+    }
+    const unsigned long now = millis();
+    if (!force && now - lastUpdateMs_ < 120UL) {
+      return;
+    }
+    lastUpdateMs_ = now;
+    ui_->showProgressOverlay(title, message, percent);
+  }
+
+ private:
+  UiRuntime *ui_ = nullptr;
+  unsigned long lastUpdateMs_ = 0;
+};
 
 String formatBytes(uint64_t bytes) {
   static const char *kUnits[] = {"B", "KB", "MB", "GB"};
@@ -125,7 +161,7 @@ bool ensureSdMounted(bool forceMount, String *error) {
   pinMode(boardpins::kSdCs, OUTPUT);
   digitalWrite(boardpins::kSdCs, HIGH);
 
-  SPIClass *spiBus = &TFT_eSPI::getSPIinstance();
+  SPIClass *spiBus = sharedspi::bus();
   const bool mounted = SD.begin(boardpins::kSdCs,
                                 *spiBus,
                                 25000000,
@@ -396,6 +432,7 @@ bool fetchLatestReleaseInfo(const RuntimeConfig &config,
 bool downloadUrlToSdFile(const String &url,
                          const char *destPath,
                          const std::function<void()> &backgroundTick,
+                         const std::function<void(uint32_t, int)> &progressTick,
                          uint32_t *bytesOut,
                          String *error) {
   if (bytesOut) {
@@ -444,6 +481,7 @@ bool downloadUrlToSdFile(const String &url,
   http.addHeader("User-Agent", "AI-cc1101-APPMarket");
 
   const int code = http.GET();
+  const int totalSize = http.getSize();
   if (code <= 0 || code < 200 || code >= 300) {
     const String response = code > 0 ? http.getString() : String("");
     http.end();
@@ -475,6 +513,9 @@ bool downloadUrlToSdFile(const String &url,
   uint8_t buffer[kTransferChunkBytes];
   uint32_t writtenTotal = 0;
   unsigned long lastProgressMs = millis();
+  if (progressTick) {
+    progressTick(0, totalSize);
+  }
 
   while (http.connected() && (remain > 0 || remain == -1)) {
     const size_t available = stream->available();
@@ -518,6 +559,9 @@ bool downloadUrlToSdFile(const String &url,
     }
 
     lastProgressMs = millis();
+    if (progressTick) {
+      progressTick(writtenTotal, totalSize);
+    }
     if (backgroundTick) {
       backgroundTick();
     }
@@ -548,11 +592,15 @@ bool downloadUrlToSdFile(const String &url,
   if (bytesOut) {
     *bytesOut = writtenTotal;
   }
+  if (progressTick) {
+    progressTick(writtenTotal, totalSize);
+  }
   return true;
 }
 
 bool installFirmwareFromSd(const String &path,
                            const std::function<void()> &backgroundTick,
+                           const std::function<void(size_t, size_t)> &progressTick,
                            String *error) {
   String sdErr;
   if (!ensureSdMounted(false, &sdErr)) {
@@ -591,6 +639,10 @@ bool installFirmwareFromSd(const String &path,
   }
 
   uint8_t buffer[kTransferChunkBytes];
+  size_t writtenTotal = 0;
+  if (progressTick) {
+    progressTick(0, size);
+  }
   while (file.available()) {
     const int readLen = file.read(buffer, sizeof(buffer));
     if (readLen <= 0) {
@@ -605,6 +657,10 @@ bool installFirmwareFromSd(const String &path,
         *error = String("Update write failed: ") + Update.errorString();
       }
       return false;
+    }
+    writtenTotal += written;
+    if (progressTick) {
+      progressTick(writtenTotal, size);
     }
 
     if (backgroundTick) {
@@ -627,11 +683,16 @@ bool installFirmwareFromSd(const String &path,
     return false;
   }
 
+  if (progressTick) {
+    progressTick(size, size);
+  }
+
   return true;
 }
 
 bool backupRunningFirmwareToSd(const char *destPath,
                                const std::function<void()> &backgroundTick,
+                               const std::function<void(size_t, size_t)> &progressTick,
                                String *error) {
   String sdErr;
   if (!ensureSdMounted(false, &sdErr)) {
@@ -673,6 +734,9 @@ bool backupRunningFirmwareToSd(const char *destPath,
 
   uint8_t buffer[kTransferChunkBytes];
   uint32_t offset = 0;
+  if (progressTick) {
+    progressTick(0, running->size);
+  }
   while (offset < running->size) {
     const size_t chunk = std::min(static_cast<uint32_t>(sizeof(buffer)),
                                   static_cast<uint32_t>(running->size - offset));
@@ -700,6 +764,9 @@ bool backupRunningFirmwareToSd(const char *destPath,
     }
 
     offset += static_cast<uint32_t>(chunk);
+    if (progressTick) {
+      progressTick(offset, running->size);
+    }
     if (backgroundTick) {
       backgroundTick();
     }
@@ -716,6 +783,9 @@ bool backupRunningFirmwareToSd(const char *destPath,
       *error = "Backup rename failed";
     }
     return false;
+  }
+  if (progressTick) {
+    progressTick(running->size, running->size);
   }
   return true;
 }
@@ -794,7 +864,7 @@ bool selectBinFileFromSd(AppContext &ctx,
                          const std::function<void()> &backgroundTick) {
   String err;
   if (!ensureSdMounted(false, &err)) {
-    ctx.ui->showToast("SD Card",
+    ctx.uiRuntime->showToast("SD Card",
                       err.isEmpty() ? String("Mount failed") : err,
                       1700,
                       backgroundTick);
@@ -807,7 +877,7 @@ bool selectBinFileFromSd(AppContext &ctx,
   while (true) {
     std::vector<FsEntry> entries;
     if (!listBinDirectory(currentPath, entries, &err)) {
-      ctx.ui->showToast("Select BIN",
+      ctx.uiRuntime->showToast("Select BIN",
                         err.isEmpty() ? String("Read failed") : err,
                         1700,
                         backgroundTick);
@@ -826,7 +896,7 @@ bool selectBinFileFromSd(AppContext &ctx,
     menu.push_back("Refresh");
     menu.push_back("Back");
 
-    const int choice = ctx.ui->menuLoop("Install from SD",
+    const int choice = ctx.uiRuntime->menuLoop("Install from SD",
                                         menu,
                                         selected,
                                         backgroundTick,
@@ -878,13 +948,13 @@ void saveAppMarketConfig(AppContext &ctx,
                          const std::function<void()> &backgroundTick) {
   String validateErr;
   if (!validateConfig(ctx.config, &validateErr)) {
-    ctx.ui->showToast("Validation", validateErr, 1800, backgroundTick);
+    ctx.uiRuntime->showToast("Validation", validateErr, 1800, backgroundTick);
     return;
   }
 
   String saveErr;
   if (!saveConfig(ctx.config, &saveErr)) {
-    ctx.ui->showToast("Save Error",
+    ctx.uiRuntime->showToast("Save Error",
                       saveErr.isEmpty() ? String("Failed to save config") : saveErr,
                       1900,
                       backgroundTick);
@@ -892,7 +962,7 @@ void saveAppMarketConfig(AppContext &ctx,
   }
 
   ctx.configDirty = false;
-  ctx.ui->showToast("APPMarket", "Config saved", 1200, backgroundTick);
+  ctx.uiRuntime->showToast("APPMarket", "Config saved", 1200, backgroundTick);
 }
 
 void showStatus(AppContext &ctx,
@@ -931,17 +1001,17 @@ void showStatus(AppContext &ctx,
     lines.push_back("Last: " + lastAction);
   }
 
-  ctx.ui->showInfo("APPMarket Status", lines, backgroundTick, "OK/BACK Exit");
+  ctx.uiRuntime->showInfo("APPMarket Status", lines, backgroundTick, "OK/BACK Exit");
 }
 
 bool confirmInstall(AppContext &ctx,
                     const String &title,
                     const String &message,
                     const std::function<void()> &backgroundTick) {
-  if (!ctx.ui->confirm(title, message, backgroundTick, "Install", "Cancel")) {
+  if (!ctx.uiRuntime->confirm(title, message, backgroundTick, "Install", "Cancel")) {
     return false;
   }
-  if (!ctx.ui->confirm("Confirm Again",
+  if (!ctx.uiRuntime->confirm("Confirm Again",
                        "Device will reboot after install",
                        backgroundTick,
                        "Install",
@@ -991,7 +1061,7 @@ void runAppMarketApp(AppContext &ctx,
       subtitle += " *DIRTY";
     }
 
-    const int choice = ctx.ui->menuLoop("APPMarket",
+    const int choice = ctx.uiRuntime->menuLoop("APPMarket",
                                         menu,
                                         selected,
                                         backgroundTick,
@@ -1009,27 +1079,27 @@ void runAppMarketApp(AppContext &ctx,
 
     if (choice == 1) {
       String value = ctx.config.appMarketGithubRepo;
-      if (!ctx.ui->textInput("GitHub Repo (owner/repo)", value, false, backgroundTick)) {
+      if (!ctx.uiRuntime->textInput("GitHub Repo (owner/repo)", value, false, backgroundTick)) {
         continue;
       }
       value = normalizeRepoSlug(value);
       ctx.config.appMarketGithubRepo = value;
       markDirty(ctx);
       lastAction = "Repo updated";
-      ctx.ui->showToast("APPMarket", "Repo updated", 1200, backgroundTick);
+      ctx.uiRuntime->showToast("APPMarket", "Repo updated", 1200, backgroundTick);
       continue;
     }
 
     if (choice == 2) {
       String value = ctx.config.appMarketReleaseAsset;
-      if (!ctx.ui->textInput("Release Asset (.bin)", value, false, backgroundTick)) {
+      if (!ctx.uiRuntime->textInput("Release Asset (.bin)", value, false, backgroundTick)) {
         continue;
       }
       value.trim();
       ctx.config.appMarketReleaseAsset = value;
       markDirty(ctx);
       lastAction = "Asset preference updated";
-      ctx.ui->showToast("APPMarket", "Asset updated", 1200, backgroundTick);
+      ctx.uiRuntime->showToast("APPMarket", "Asset updated", 1200, backgroundTick);
       continue;
     }
 
@@ -1038,7 +1108,7 @@ void runAppMarketApp(AppContext &ctx,
       String err;
       if (!fetchLatestReleaseInfo(ctx.config, info, &err)) {
         lastAction = "Latest check failed: " + err;
-        ctx.ui->showToast("APPMarket", err, 1800, backgroundTick);
+        ctx.uiRuntime->showToast("APPMarket", err, 1800, backgroundTick);
         continue;
       }
 
@@ -1052,7 +1122,7 @@ void runAppMarketApp(AppContext &ctx,
       lines.push_back("Size: " + formatBytes(info.size));
       lines.push_back("URL:");
       lines.push_back(trimMiddle(info.downloadUrl, 38));
-      ctx.ui->showInfo("Latest Release", lines, backgroundTick, "OK/BACK Exit");
+      ctx.uiRuntime->showInfo("Latest Release", lines, backgroundTick, "OK/BACK Exit");
       continue;
     }
 
@@ -1061,31 +1131,44 @@ void runAppMarketApp(AppContext &ctx,
       String err;
       if (!fetchLatestReleaseInfo(ctx.config, info, &err)) {
         lastAction = "Download check failed: " + err;
-        ctx.ui->showToast("APPMarket", err, 1800, backgroundTick);
+        ctx.uiRuntime->showToast("APPMarket", err, 1800, backgroundTick);
         continue;
       }
 
       uint32_t downloaded = 0;
-      if (!downloadUrlToSdFile(info.downloadUrl,
-                               kLatestPackagePath,
-                               backgroundTick,
-                               &downloaded,
-                               &err)) {
-        lastAction = "Download failed: " + err;
-        ctx.ui->showToast("APPMarket", err, 1800, backgroundTick);
-        continue;
+      {
+        OverlayScope overlay(ctx.uiRuntime, "APPMarket", "Preparing download...", -1);
+        if (!downloadUrlToSdFile(info.downloadUrl,
+                                 kLatestPackagePath,
+                                 backgroundTick,
+                                 [&](uint32_t written, int total) {
+                                   int percent = -1;
+                                   String progressText = "Downloading " + formatBytes(written);
+                                   if (total > 0) {
+                                     percent = static_cast<int>((static_cast<uint64_t>(written) * 100ULL) /
+                                                                static_cast<uint64_t>(total));
+                                     progressText += " / " + formatBytes(static_cast<uint32_t>(total));
+                                   }
+                                   overlay.update("APPMarket", progressText, percent);
+                                 },
+                                 &downloaded,
+                                 &err)) {
+          lastAction = "Download failed: " + err;
+          ctx.uiRuntime->showToast("APPMarket", err, 1800, backgroundTick);
+          continue;
+        }
       }
 
       lastTag = info.tag;
       lastAsset = info.assetName;
       lastAction = "Downloaded " + info.assetName + " (" + formatBytes(downloaded) + ")";
-      ctx.ui->showToast("APPMarket", "Downloaded to SD", 1500, backgroundTick);
+      ctx.uiRuntime->showToast("APPMarket", "Downloaded to SD", 1500, backgroundTick);
       continue;
     }
 
     if (choice == 5) {
       if (!latestExists) {
-        ctx.ui->showToast("APPMarket", "Latest package not found", 1700, backgroundTick);
+        ctx.uiRuntime->showToast("APPMarket", "Latest package not found", 1700, backgroundTick);
         continue;
       }
       if (!confirmInstall(ctx,
@@ -1096,13 +1179,28 @@ void runAppMarketApp(AppContext &ctx,
       }
 
       String err;
-      if (!installFirmwareFromSd(kLatestPackagePath, backgroundTick, &err)) {
-        lastAction = "Install latest failed: " + err;
-        ctx.ui->showToast("APPMarket", err, 1900, backgroundTick);
-        continue;
+      {
+        OverlayScope overlay(ctx.uiRuntime, "APPMarket", "Flashing latest package...", 0);
+        if (!installFirmwareFromSd(kLatestPackagePath,
+                                   backgroundTick,
+                                   [&](size_t written, size_t total) {
+                                     int percent = -1;
+                                     if (total > 0) {
+                                       percent = static_cast<int>((written * 100ULL) / total);
+                                     }
+                                     const String progressText =
+                                         "Flashing " + formatBytes(static_cast<uint64_t>(written)) +
+                                         " / " + formatBytes(static_cast<uint64_t>(total));
+                                     overlay.update("APPMarket", progressText, percent);
+                                   },
+                                   &err)) {
+          lastAction = "Install latest failed: " + err;
+          ctx.uiRuntime->showToast("APPMarket", err, 1900, backgroundTick);
+          continue;
+        }
       }
 
-      ctx.ui->showToast("APPMarket", "Install complete, rebooting", 1200, backgroundTick);
+      ctx.uiRuntime->showToast("APPMarket", "Install complete, rebooting", 1200, backgroundTick);
       delay(300);
       ESP.restart();
       return;
@@ -1110,23 +1208,38 @@ void runAppMarketApp(AppContext &ctx,
 
     if (choice == 6) {
       String err;
-      if (!backupRunningFirmwareToSd(kBackupPackagePath, backgroundTick, &err)) {
-        lastAction = "Backup failed: " + err;
-        ctx.ui->showToast("APPMarket", err, 1900, backgroundTick);
-        continue;
+      {
+        OverlayScope overlay(ctx.uiRuntime, "APPMarket", "Backing up running firmware...", 0);
+        if (!backupRunningFirmwareToSd(kBackupPackagePath,
+                                       backgroundTick,
+                                       [&](size_t written, size_t total) {
+                                         int percent = -1;
+                                         if (total > 0) {
+                                           percent = static_cast<int>((written * 100ULL) / total);
+                                         }
+                                         const String progressText =
+                                             "Backup " + formatBytes(static_cast<uint64_t>(written)) +
+                                             " / " + formatBytes(static_cast<uint64_t>(total));
+                                         overlay.update("APPMarket", progressText, percent);
+                                       },
+                                       &err)) {
+          lastAction = "Backup failed: " + err;
+          ctx.uiRuntime->showToast("APPMarket", err, 1900, backgroundTick);
+          continue;
+        }
       }
 
       uint32_t backupSize = 0;
       statSdFile(kBackupPackagePath, backupSize);
       lastAction = "Backup created (" + formatBytes(backupSize) + ")";
-      ctx.ui->showToast("APPMarket", "Backup saved to SD", 1500, backgroundTick);
+      ctx.uiRuntime->showToast("APPMarket", "Backup saved to SD", 1500, backgroundTick);
       continue;
     }
 
     if (choice == 7) {
       uint32_t backupSize = 0;
       if (!statSdFile(kBackupPackagePath, backupSize)) {
-        ctx.ui->showToast("APPMarket", "Backup package not found", 1700, backgroundTick);
+        ctx.uiRuntime->showToast("APPMarket", "Backup package not found", 1700, backgroundTick);
         continue;
       }
       if (!confirmInstall(ctx,
@@ -1137,13 +1250,28 @@ void runAppMarketApp(AppContext &ctx,
       }
 
       String err;
-      if (!installFirmwareFromSd(kBackupPackagePath, backgroundTick, &err)) {
-        lastAction = "Reinstall failed: " + err;
-        ctx.ui->showToast("APPMarket", err, 1900, backgroundTick);
-        continue;
+      {
+        OverlayScope overlay(ctx.uiRuntime, "APPMarket", "Flashing backup package...", 0);
+        if (!installFirmwareFromSd(kBackupPackagePath,
+                                   backgroundTick,
+                                   [&](size_t written, size_t total) {
+                                     int percent = -1;
+                                     if (total > 0) {
+                                       percent = static_cast<int>((written * 100ULL) / total);
+                                     }
+                                     const String progressText =
+                                         "Flashing " + formatBytes(static_cast<uint64_t>(written)) +
+                                         " / " + formatBytes(static_cast<uint64_t>(total));
+                                     overlay.update("APPMarket", progressText, percent);
+                                   },
+                                   &err)) {
+          lastAction = "Reinstall failed: " + err;
+          ctx.uiRuntime->showToast("APPMarket", err, 1900, backgroundTick);
+          continue;
+        }
       }
 
-      ctx.ui->showToast("APPMarket", "Reinstall complete, rebooting", 1200, backgroundTick);
+      ctx.uiRuntime->showToast("APPMarket", "Reinstall complete, rebooting", 1200, backgroundTick);
       delay(300);
       ESP.restart();
       return;
@@ -1163,13 +1291,28 @@ void runAppMarketApp(AppContext &ctx,
       }
 
       String err;
-      if (!installFirmwareFromSd(path, backgroundTick, &err)) {
-        lastAction = "Install SD failed: " + err;
-        ctx.ui->showToast("APPMarket", err, 1900, backgroundTick);
-        continue;
+      {
+        OverlayScope overlay(ctx.uiRuntime, "APPMarket", "Flashing selected package...", 0);
+        if (!installFirmwareFromSd(path,
+                                   backgroundTick,
+                                   [&](size_t written, size_t total) {
+                                     int percent = -1;
+                                     if (total > 0) {
+                                       percent = static_cast<int>((written * 100ULL) / total);
+                                     }
+                                     const String progressText =
+                                         "Flashing " + formatBytes(static_cast<uint64_t>(written)) +
+                                         " / " + formatBytes(static_cast<uint64_t>(total));
+                                     overlay.update("APPMarket", progressText, percent);
+                                   },
+                                   &err)) {
+          lastAction = "Install SD failed: " + err;
+          ctx.uiRuntime->showToast("APPMarket", err, 1900, backgroundTick);
+          continue;
+        }
       }
 
-      ctx.ui->showToast("APPMarket", "Install complete, rebooting", 1200, backgroundTick);
+      ctx.uiRuntime->showToast("APPMarket", "Install complete, rebooting", 1200, backgroundTick);
       delay(300);
       ESP.restart();
       return;
@@ -1178,32 +1321,32 @@ void runAppMarketApp(AppContext &ctx,
     if (choice == 9) {
       String err;
       if (!ensureSdMounted(false, &err)) {
-        ctx.ui->showToast("APPMarket", err, 1700, backgroundTick);
+        ctx.uiRuntime->showToast("APPMarket", err, 1700, backgroundTick);
         continue;
       }
       if (!removeSdFileIfExists(kLatestPackagePath, &err)) {
         lastAction = "Delete latest failed: " + err;
-        ctx.ui->showToast("APPMarket", err, 1700, backgroundTick);
+        ctx.uiRuntime->showToast("APPMarket", err, 1700, backgroundTick);
         continue;
       }
       lastAction = "Deleted latest package";
-      ctx.ui->showToast("APPMarket", "Latest package deleted", 1300, backgroundTick);
+      ctx.uiRuntime->showToast("APPMarket", "Latest package deleted", 1300, backgroundTick);
       continue;
     }
 
     if (choice == 10) {
       String err;
       if (!ensureSdMounted(false, &err)) {
-        ctx.ui->showToast("APPMarket", err, 1700, backgroundTick);
+        ctx.uiRuntime->showToast("APPMarket", err, 1700, backgroundTick);
         continue;
       }
       if (!removeSdFileIfExists(kBackupPackagePath, &err)) {
         lastAction = "Delete backup failed: " + err;
-        ctx.ui->showToast("APPMarket", err, 1700, backgroundTick);
+        ctx.uiRuntime->showToast("APPMarket", err, 1700, backgroundTick);
         continue;
       }
       lastAction = "Deleted backup package";
-      ctx.ui->showToast("APPMarket", "Backup package deleted", 1300, backgroundTick);
+      ctx.uiRuntime->showToast("APPMarket", "Backup package deleted", 1300, backgroundTick);
       continue;
     }
 
@@ -1216,4 +1359,3 @@ void runAppMarketApp(AppContext &ctx,
     }
   }
 }
-

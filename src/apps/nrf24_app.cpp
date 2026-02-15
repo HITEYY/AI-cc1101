@@ -6,7 +6,7 @@
 #include <vector>
 
 #include "../core/board_pins.h"
-#include "../ui/ui_shell.h"
+#include "../ui/ui_runtime.h"
 #include "user_config.h"
 
 #if __has_include(<RF24.h>)
@@ -169,7 +169,7 @@ void showNrf24Info(AppContext &ctx,
   if (!ensureNrf24Ready(&err)) {
     lines.push_back("State: Missing");
     lines.push_back(err.isEmpty() ? String("Check wiring/power") : err);
-    ctx.ui->showInfo("NRF24", lines, backgroundTick, "OK/BACK Exit");
+    ctx.uiRuntime->showInfo("NRF24", lines, backgroundTick, "OK/BACK Exit");
     return;
   }
 
@@ -178,14 +178,14 @@ void showNrf24Info(AppContext &ctx,
   lines.push_back("DataRate: " + dataRateName(gDataRate));
   lines.push_back("PA: " + paLevelName(gPaLevel));
   lines.push_back("Pipe: CC24A");
-  ctx.ui->showInfo("NRF24", lines, backgroundTick, "OK/BACK Exit");
+  ctx.uiRuntime->showInfo("NRF24", lines, backgroundTick, "OK/BACK Exit");
 }
 
 void configureNrf24(AppContext &ctx,
                     const std::function<void()> &backgroundTick) {
   String err;
   if (!ensureNrf24Ready(&err)) {
-    ctx.ui->showToast("NRF24",
+    ctx.uiRuntime->showToast("NRF24",
                       err.isEmpty() ? String("nRF24 not ready") : err,
                       1700,
                       backgroundTick);
@@ -193,13 +193,13 @@ void configureNrf24(AppContext &ctx,
   }
 
   String channelIn = String(gChannel);
-  if (!ctx.ui->textInput("Channel (0..125)", channelIn, false, backgroundTick)) {
+  if (!ctx.uiRuntime->textInput("Channel (0..125)", channelIn, false, backgroundTick)) {
     return;
   }
 
   int channel = 0;
   if (!parseIntToken(channelIn, channel) || channel < 0 || channel > 125) {
-    ctx.ui->showToast("NRF24", "Invalid channel", 1200, backgroundTick);
+    ctx.uiRuntime->showToast("NRF24", "Invalid channel", 1200, backgroundTick);
     return;
   }
 
@@ -208,7 +208,7 @@ void configureNrf24(AppContext &ctx,
   rateMenu.push_back("1: 1Mbps");
   rateMenu.push_back("2: 2Mbps");
   int rateChoice = gDataRate <= 2 ? gDataRate : 1;
-  const int selectedRate = ctx.ui->menuLoop("NRF24 DataRate",
+  const int selectedRate = ctx.uiRuntime->menuLoop("NRF24 DataRate",
                                              rateMenu,
                                              rateChoice,
                                              backgroundTick,
@@ -224,7 +224,7 @@ void configureNrf24(AppContext &ctx,
   paMenu.push_back("2: HIGH");
   paMenu.push_back("3: MAX");
   int paChoice = gPaLevel <= 3 ? gPaLevel : 1;
-  const int selectedPa = ctx.ui->menuLoop("NRF24 PA",
+  const int selectedPa = ctx.uiRuntime->menuLoop("NRF24 PA",
                                            paMenu,
                                            paChoice,
                                            backgroundTick,
@@ -239,14 +239,14 @@ void configureNrf24(AppContext &ctx,
   gPaLevel = static_cast<uint8_t>(selectedPa);
   applyNrf24Config();
 
-  ctx.ui->showToast("NRF24", "Config applied", 1200, backgroundTick);
+  ctx.uiRuntime->showToast("NRF24", "Config applied", 1200, backgroundTick);
 }
 
 void sendNrf24Text(AppContext &ctx,
                    const std::function<void()> &backgroundTick) {
   String err;
   if (!ensureNrf24Ready(&err)) {
-    ctx.ui->showToast("NRF24",
+    ctx.uiRuntime->showToast("NRF24",
                       err.isEmpty() ? String("nRF24 not ready") : err,
                       1700,
                       backgroundTick);
@@ -254,15 +254,15 @@ void sendNrf24Text(AppContext &ctx,
   }
 
   String text;
-  if (!ctx.ui->textInput("TX Text (<=32)", text, false, backgroundTick)) {
+  if (!ctx.uiRuntime->textInput("TX Text (<=32)", text, false, backgroundTick)) {
     return;
   }
   if (text.isEmpty()) {
-    ctx.ui->showToast("NRF24 TX", "Text is empty", 1100, backgroundTick);
+    ctx.uiRuntime->showToast("NRF24 TX", "Text is empty", 1100, backgroundTick);
     return;
   }
   if (text.length() > 32) {
-    ctx.ui->showToast("NRF24 TX", "Max 32 bytes", 1200, backgroundTick);
+    ctx.uiRuntime->showToast("NRF24 TX", "Max 32 bytes", 1200, backgroundTick);
     return;
   }
 
@@ -276,7 +276,7 @@ void sendNrf24Text(AppContext &ctx,
   const bool ok = gNrf24.write(payload, len);
   gNrf24.startListening();
 
-  ctx.ui->showToast("NRF24 TX",
+  ctx.uiRuntime->showToast("NRF24 TX",
                     ok ? String("Sent") : String("Send failed"),
                     1200,
                     backgroundTick);
@@ -286,7 +286,7 @@ void receiveNrf24Once(AppContext &ctx,
                       const std::function<void()> &backgroundTick) {
   String err;
   if (!ensureNrf24Ready(&err)) {
-    ctx.ui->showToast("NRF24",
+    ctx.uiRuntime->showToast("NRF24",
                       err.isEmpty() ? String("nRF24 not ready") : err,
                       1700,
                       backgroundTick);
@@ -294,13 +294,13 @@ void receiveNrf24Once(AppContext &ctx,
   }
 
   String timeoutIn = "3000";
-  if (!ctx.ui->textInput("RX Timeout ms", timeoutIn, false, backgroundTick)) {
+  if (!ctx.uiRuntime->textInput("RX Timeout ms", timeoutIn, false, backgroundTick)) {
     return;
   }
 
   int timeoutMs = 0;
   if (!parseIntToken(timeoutIn, timeoutMs) || timeoutMs < 1 || timeoutMs > 60000) {
-    ctx.ui->showToast("NRF24 RX", "Invalid timeout", 1200, backgroundTick);
+    ctx.uiRuntime->showToast("NRF24 RX", "Invalid timeout", 1200, backgroundTick);
     return;
   }
 
@@ -327,7 +327,7 @@ void receiveNrf24Once(AppContext &ctx,
       lines.push_back("Bytes: " + String(len));
       lines.push_back("ASCII: " + text);
       lines.push_back("HEX: " + bytesToHex(payload, len));
-      ctx.ui->showInfo("NRF24 RX", lines, backgroundTick, "OK/BACK Exit");
+      ctx.uiRuntime->showInfo("NRF24 RX", lines, backgroundTick, "OK/BACK Exit");
       return;
     }
 
@@ -337,7 +337,7 @@ void receiveNrf24Once(AppContext &ctx,
     delay(8);
   }
 
-  ctx.ui->showToast("NRF24 RX", "Timeout", 1200, backgroundTick);
+  ctx.uiRuntime->showToast("NRF24 RX", "Timeout", 1200, backgroundTick);
 }
 #endif
 
@@ -355,7 +355,7 @@ void runNrf24App(AppContext &ctx,
     menu.push_back("Receive Once");
     menu.push_back("Back");
 
-    const int choice = ctx.ui->menuLoop("NRF24",
+    const int choice = ctx.uiRuntime->menuLoop("NRF24",
                                         menu,
                                         selected,
                                         backgroundTick,
@@ -379,7 +379,7 @@ void runNrf24App(AppContext &ctx,
     }
 #else
     (void)choice;
-    ctx.ui->showToast("NRF24", "RF24 library missing", 1800, backgroundTick);
+    ctx.uiRuntime->showToast("NRF24", "RF24 library missing", 1800, backgroundTick);
     return;
 #endif
   }

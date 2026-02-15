@@ -2,7 +2,6 @@
 
 #include <SD.h>
 #include <SPI.h>
-#include <TFT_eSPI.h>
 #include <WiFi.h>
 #include <mbedtls/base64.h>
 #include <time.h>
@@ -16,8 +15,9 @@
 #include "../core/board_pins.h"
 #include "../core/gateway_client.h"
 #include "../core/runtime_config.h"
+#include "../core/shared_spi_bus.h"
 #include "../core/wifi_manager.h"
-#include "../ui/ui_shell.h"
+#include "../ui/ui_runtime.h"
 #include "user_config.h"
 
 namespace {
@@ -240,7 +240,7 @@ bool ensureSdMountedForVoice(String *error = nullptr) {
   pinMode(boardpins::kSdCs, OUTPUT);
   digitalWrite(boardpins::kSdCs, HIGH);
 
-  SPIClass *spiBus = &TFT_eSPI::getSPIinstance();
+  SPIClass *spiBus = sharedspi::bus();
   const bool mounted = SD.begin(boardpins::kSdCs,
                                 *spiBus,
                                 25000000,
@@ -257,7 +257,7 @@ bool ensureGatewayReady(AppContext &ctx,
                         const std::function<void()> &backgroundTick) {
   const GatewayStatus status = ctx.gateway->status();
   if (!status.gatewayReady) {
-    ctx.ui->showToast("Messenger", "Gateway is not ready", 1500, backgroundTick);
+    ctx.uiRuntime->showToast("Messenger", "Gateway is not ready", 1500, backgroundTick);
     return false;
   }
   return true;
@@ -270,12 +270,12 @@ void sendTextMessage(AppContext &ctx,
   }
 
   String text;
-  if (!ctx.ui->textInput("Text Message", text, false, backgroundTick)) {
+  if (!ctx.uiRuntime->textInput("Text Message", text, false, backgroundTick)) {
     return;
   }
   text.trim();
   if (text.isEmpty()) {
-    ctx.ui->showToast("Messenger", "Message is empty", 1400, backgroundTick);
+    ctx.uiRuntime->showToast("Messenger", "Message is empty", 1400, backgroundTick);
     return;
   }
 
@@ -293,7 +293,7 @@ void sendTextMessage(AppContext &ctx,
   }
 
   if (!ctx.gateway->sendNodeEvent("msg.text", payload)) {
-    ctx.ui->showToast("Messenger", "Text send failed", 1500, backgroundTick);
+    ctx.uiRuntime->showToast("Messenger", "Text send failed", 1500, backgroundTick);
     return;
   }
 
@@ -307,7 +307,7 @@ void sendTextMessage(AppContext &ctx,
   sent.tsMs = ts;
   pushOutbox(sent);
 
-  ctx.ui->showToast("Messenger", "Text sent", 1100, backgroundTick);
+  ctx.uiRuntime->showToast("Messenger", "Text sent", 1100, backgroundTick);
 }
 
 bool sendVoiceFileMessage(AppContext &ctx,
@@ -319,7 +319,7 @@ bool sendVoiceFileMessage(AppContext &ctx,
   }
 
   if (filePath.isEmpty()) {
-    ctx.ui->showToast("Voice", "Path is empty", 1300, backgroundTick);
+    ctx.uiRuntime->showToast("Voice", "Path is empty", 1300, backgroundTick);
     return false;
   }
 
@@ -330,19 +330,19 @@ bool sendVoiceFileMessage(AppContext &ctx,
     if (file) {
       file.close();
     }
-    ctx.ui->showToast("Voice", "Open voice file failed", 1600, backgroundTick);
+    ctx.uiRuntime->showToast("Voice", "Open voice file failed", 1600, backgroundTick);
     return false;
   }
 
   const uint32_t totalBytes = static_cast<uint32_t>(file.size());
   if (totalBytes == 0) {
     file.close();
-    ctx.ui->showToast("Voice", "Voice file is empty", 1500, backgroundTick);
+    ctx.uiRuntime->showToast("Voice", "Voice file is empty", 1500, backgroundTick);
     return false;
   }
   if (totalBytes > kMaxVoiceBytes) {
     file.close();
-    ctx.ui->showToast("Voice", "File too large (max 2MB)", 1800, backgroundTick);
+    ctx.uiRuntime->showToast("Voice", "File too large (max 2MB)", 1800, backgroundTick);
     return false;
   }
 
@@ -371,7 +371,7 @@ bool sendVoiceFileMessage(AppContext &ctx,
 
   if (!ctx.gateway->sendNodeEvent("msg.voice.meta", meta)) {
     file.close();
-    ctx.ui->showToast("Voice", "Voice meta send failed", 1700, backgroundTick);
+    ctx.uiRuntime->showToast("Voice", "Voice meta send failed", 1700, backgroundTick);
     return false;
   }
 
@@ -386,7 +386,7 @@ bool sendVoiceFileMessage(AppContext &ctx,
     const String encoded = encodeBase64(raw, readLen);
     if (encoded.isEmpty()) {
       file.close();
-      ctx.ui->showToast("Voice", "Base64 encode failed", 1700, backgroundTick);
+      ctx.uiRuntime->showToast("Voice", "Base64 encode failed", 1700, backgroundTick);
       return false;
     }
 
@@ -405,7 +405,7 @@ bool sendVoiceFileMessage(AppContext &ctx,
 
     if (!ctx.gateway->sendNodeEvent("msg.voice.chunk", chunk)) {
       file.close();
-      ctx.ui->showToast("Voice", "Voice chunk send failed", 1700, backgroundTick);
+      ctx.uiRuntime->showToast("Voice", "Voice chunk send failed", 1700, backgroundTick);
       return false;
     }
 
@@ -417,7 +417,7 @@ bool sendVoiceFileMessage(AppContext &ctx,
   file.close();
 
   if (chunkIndex != totalChunks) {
-    ctx.ui->showToast("Voice", "Voice send incomplete", 1700, backgroundTick);
+    ctx.uiRuntime->showToast("Voice", "Voice send incomplete", 1700, backgroundTick);
     return false;
   }
 
@@ -434,7 +434,7 @@ bool sendVoiceFileMessage(AppContext &ctx,
   sent.tsMs = metaTs;
   pushOutbox(sent);
 
-  ctx.ui->showToast("Voice", "Voice sent", 1200, backgroundTick);
+  ctx.uiRuntime->showToast("Voice", "Voice sent", 1200, backgroundTick);
   return true;
 }
 
@@ -472,12 +472,12 @@ void sendVoiceMessage(AppContext &ctx,
   }
 
   String filePath = "/voice.wav";
-  if (!ctx.ui->textInput("Voice File Path", filePath, false, backgroundTick)) {
+  if (!ctx.uiRuntime->textInput("Voice File Path", filePath, false, backgroundTick)) {
     return;
   }
   filePath.trim();
   if (filePath.isEmpty()) {
-    ctx.ui->showToast("Voice", "Path is empty", 1300, backgroundTick);
+    ctx.uiRuntime->showToast("Voice", "Path is empty", 1300, backgroundTick);
     return;
   }
   if (!filePath.startsWith("/")) {
@@ -485,14 +485,14 @@ void sendVoiceMessage(AppContext &ctx,
   }
 
   String caption;
-  if (!ctx.ui->textInput("Caption(optional)", caption, false, backgroundTick)) {
+  if (!ctx.uiRuntime->textInput("Caption(optional)", caption, false, backgroundTick)) {
     return;
   }
   caption.trim();
 
   String mountErr;
   if (!ensureSdMountedForVoice(&mountErr)) {
-    ctx.ui->showToast("Voice",
+    ctx.uiRuntime->showToast("Voice",
                       mountErr.isEmpty() ? String("SD mount failed") : mountErr,
                       1600,
                       backgroundTick);
@@ -509,26 +509,26 @@ void recordVoiceFromMic(AppContext &ctx,
   }
 
   if (!isMicRecordingAvailable()) {
-    ctx.ui->showToast("Voice", "MIC pin not configured", 1700, backgroundTick);
+    ctx.uiRuntime->showToast("Voice", "MIC pin not configured", 1700, backgroundTick);
     return;
   }
 
   String durationText = String(static_cast<unsigned long>(
       std::max<uint32_t>(1U, static_cast<uint32_t>(USER_MIC_DEFAULT_SECONDS))));
-  if (!ctx.ui->textInput("Record Seconds", durationText, false, backgroundTick)) {
+  if (!ctx.uiRuntime->textInput("Record Seconds", durationText, false, backgroundTick)) {
     return;
   }
 
   uint16_t seconds = 0;
   if (!parseSecondsInput(durationText, &seconds)) {
-    ctx.ui->showToast("Voice", "Invalid record seconds", 1600, backgroundTick);
+    ctx.uiRuntime->showToast("Voice", "Invalid record seconds", 1600, backgroundTick);
     return;
   }
 
   const uint16_t maxSeconds = static_cast<uint16_t>(
       std::max<uint32_t>(1U, static_cast<uint32_t>(USER_MIC_MAX_SECONDS)));
   if (seconds > maxSeconds) {
-    ctx.ui->showToast("Voice",
+    ctx.uiRuntime->showToast("Voice",
                       "Max " + String(maxSeconds) + " seconds",
                       1600,
                       backgroundTick);
@@ -536,14 +536,14 @@ void recordVoiceFromMic(AppContext &ctx,
   }
 
   String caption;
-  if (!ctx.ui->textInput("Caption(optional)", caption, false, backgroundTick)) {
+  if (!ctx.uiRuntime->textInput("Caption(optional)", caption, false, backgroundTick)) {
     return;
   }
   caption.trim();
 
   String mountErr;
   if (!ensureSdMountedForVoice(&mountErr)) {
-    ctx.ui->showToast("Voice",
+    ctx.uiRuntime->showToast("Voice",
                       mountErr.isEmpty() ? String("SD mount failed") : mountErr,
                       1600,
                       backgroundTick);
@@ -554,7 +554,7 @@ void recordVoiceFromMic(AppContext &ctx,
   voicePath += String(static_cast<unsigned long>(millis()));
   voicePath += ".wav";
 
-  ctx.ui->showToast("Voice", "Recording from MIC...", 900, backgroundTick);
+  ctx.uiRuntime->showToast("Voice", "Recording from MIC...", 900, backgroundTick);
 
   String recordErr;
   uint32_t bytesWritten = 0;
@@ -563,7 +563,7 @@ void recordVoiceFromMic(AppContext &ctx,
                         backgroundTick,
                         &recordErr,
                         &bytesWritten)) {
-    ctx.ui->showToast("Voice",
+    ctx.uiRuntime->showToast("Voice",
                       recordErr.isEmpty() ? String("MIC recording failed")
                                           : recordErr,
                       1800,
@@ -573,7 +573,7 @@ void recordVoiceFromMic(AppContext &ctx,
 
   if (bytesWritten > kMaxVoiceBytes) {
     SD.remove(voicePath.c_str());
-    ctx.ui->showToast("Voice", "Recording too large for send", 1700, backgroundTick);
+    ctx.uiRuntime->showToast("Voice", "Recording too large for send", 1700, backgroundTick);
     return;
   }
 
@@ -584,10 +584,10 @@ void recordVoiceFromBle(AppContext &ctx,
                         const std::function<void()> &backgroundTick) {
   BleStatus bs = ctx.ble->status();
   if (!bs.connected) {
-    ctx.ui->showToast("BLE", "No BLE device connected", 1600, backgroundTick);
+    ctx.uiRuntime->showToast("BLE", "No BLE device connected", 1600, backgroundTick);
     return;
   }
-  ctx.ui->showToast("BLE",
+  ctx.uiRuntime->showToast("BLE",
                     "BLE audio stream is unsupported, use MIC",
                     1900,
                     backgroundTick);
@@ -600,7 +600,7 @@ void recordVoiceMessage(AppContext &ctx,
   sourceMenu.push_back("BLE Device");
   sourceMenu.push_back("Back");
 
-  const int choice = ctx.ui->menuLoop("Record Voice",
+  const int choice = ctx.uiRuntime->menuLoop("Record Voice",
                                       sourceMenu,
                                       0,
                                       backgroundTick,
@@ -624,12 +624,12 @@ void sendFileMessage(AppContext &ctx,
   }
 
   String filePath = "/upload.bin";
-  if (!ctx.ui->textInput("File Path", filePath, false, backgroundTick)) {
+  if (!ctx.uiRuntime->textInput("File Path", filePath, false, backgroundTick)) {
     return;
   }
   filePath.trim();
   if (filePath.isEmpty()) {
-    ctx.ui->showToast("File", "Path is empty", 1300, backgroundTick);
+    ctx.uiRuntime->showToast("File", "Path is empty", 1300, backgroundTick);
     return;
   }
   if (!filePath.startsWith("/")) {
@@ -638,14 +638,14 @@ void sendFileMessage(AppContext &ctx,
 
   const String target = defaultAgentId();
   String caption;
-  if (!ctx.ui->textInput("Message(optional)", caption, false, backgroundTick)) {
+  if (!ctx.uiRuntime->textInput("Message(optional)", caption, false, backgroundTick)) {
     return;
   }
   caption.trim();
 
   String mountErr;
   if (!ensureSdMountedForVoice(&mountErr)) {
-    ctx.ui->showToast("File",
+    ctx.uiRuntime->showToast("File",
                       mountErr.isEmpty() ? String("SD mount failed") : mountErr,
                       1600,
                       backgroundTick);
@@ -657,19 +657,19 @@ void sendFileMessage(AppContext &ctx,
     if (file) {
       file.close();
     }
-    ctx.ui->showToast("File", "Open file failed", 1600, backgroundTick);
+    ctx.uiRuntime->showToast("File", "Open file failed", 1600, backgroundTick);
     return;
   }
 
   const uint32_t totalBytes = static_cast<uint32_t>(file.size());
   if (totalBytes == 0) {
     file.close();
-    ctx.ui->showToast("File", "File is empty", 1500, backgroundTick);
+    ctx.uiRuntime->showToast("File", "File is empty", 1500, backgroundTick);
     return;
   }
   if (totalBytes > kMaxFileBytes) {
     file.close();
-    ctx.ui->showToast("File", "File too large (max 4MB)", 1800, backgroundTick);
+    ctx.uiRuntime->showToast("File", "File too large (max 4MB)", 1800, backgroundTick);
     return;
   }
 
@@ -698,7 +698,7 @@ void sendFileMessage(AppContext &ctx,
 
   if (!ctx.gateway->sendNodeEvent("msg.file.meta", meta)) {
     file.close();
-    ctx.ui->showToast("File", "File meta send failed", 1700, backgroundTick);
+    ctx.uiRuntime->showToast("File", "File meta send failed", 1700, backgroundTick);
     return;
   }
 
@@ -713,7 +713,7 @@ void sendFileMessage(AppContext &ctx,
     const String encoded = encodeBase64(raw, readLen);
     if (encoded.isEmpty()) {
       file.close();
-      ctx.ui->showToast("File", "Base64 encode failed", 1700, backgroundTick);
+      ctx.uiRuntime->showToast("File", "Base64 encode failed", 1700, backgroundTick);
       return;
     }
 
@@ -732,7 +732,7 @@ void sendFileMessage(AppContext &ctx,
 
     if (!ctx.gateway->sendNodeEvent("msg.file.chunk", chunk)) {
       file.close();
-      ctx.ui->showToast("File", "File chunk send failed", 1700, backgroundTick);
+      ctx.uiRuntime->showToast("File", "File chunk send failed", 1700, backgroundTick);
       return;
     }
 
@@ -744,7 +744,7 @@ void sendFileMessage(AppContext &ctx,
   file.close();
 
   if (chunkIndex != totalChunks) {
-    ctx.ui->showToast("File", "File send incomplete", 1700, backgroundTick);
+    ctx.uiRuntime->showToast("File", "File send incomplete", 1700, backgroundTick);
     return;
   }
 
@@ -761,7 +761,7 @@ void sendFileMessage(AppContext &ctx,
   sent.tsMs = metaTs;
   pushOutbox(sent);
 
-  ctx.ui->showToast("File", "File sent", 1200, backgroundTick);
+  ctx.uiRuntime->showToast("File", "File sent", 1200, backgroundTick);
 }
 
 String makeChatPreview(const ChatEntry &entry) {
@@ -882,12 +882,12 @@ void showChatEntryDetail(AppContext &ctx,
     lines.push_back("TS(ms): " + String(static_cast<unsigned long long>(message.tsMs)));
   }
 
-  ctx.ui->showInfo("Chat Detail", lines, backgroundTick, "OK/BACK Exit");
+  ctx.uiRuntime->showInfo("Chat Detail", lines, backgroundTick, "OK/BACK Exit");
 }
 
 void clearChatLog(AppContext &ctx,
                   const std::function<void()> &backgroundTick) {
-  if (!ctx.ui->confirm("Clear Chat",
+  if (!ctx.uiRuntime->confirm("Clear Chat",
                        "Delete all sent and received logs?",
                        backgroundTick,
                        "Clear",
@@ -896,7 +896,7 @@ void clearChatLog(AppContext &ctx,
   }
   ctx.gateway->clearInbox();
   clearOutbox();
-  ctx.ui->showToast("Chat", "Chat log cleared", 1200, backgroundTick);
+  ctx.uiRuntime->showToast("Chat", "Chat log cleared", 1200, backgroundTick);
 }
 
 void runMessagingMenu(AppContext &ctx,
@@ -933,7 +933,7 @@ void runMessagingMenu(AppContext &ctx,
     subtitle += " GW:";
     subtitle += ctx.gateway->status().gatewayReady ? "READY" : "DOWN";
 
-    const int choice = ctx.ui->menuLoop("Messenger",
+    const int choice = ctx.uiRuntime->menuLoop("Messenger",
                                         menu,
                                         selected,
                                         backgroundTick,
@@ -985,7 +985,7 @@ void runGatewayMenu(AppContext &ctx,
     String subtitle = "Auth: ";
     subtitle += gatewayAuthModeName(ctx.config.gatewayAuthMode);
 
-    const int choice = ctx.ui->menuLoop("OpenClaw / Gateway",
+    const int choice = ctx.uiRuntime->menuLoop("OpenClaw / Gateway",
                                         menu,
                                         selected,
                                         backgroundTick,
@@ -998,7 +998,7 @@ void runGatewayMenu(AppContext &ctx,
 
     if (choice == 0) {
       String url = ctx.config.gatewayUrl;
-      if (ctx.ui->textInput("Gateway URL", url, false, backgroundTick)) {
+      if (ctx.uiRuntime->textInput("Gateway URL", url, false, backgroundTick)) {
         ctx.config.gatewayUrl = url;
         markDirty(ctx);
       }
@@ -1011,7 +1011,7 @@ void runGatewayMenu(AppContext &ctx,
       authItems.push_back("Password");
 
       const int current = ctx.config.gatewayAuthMode == GatewayAuthMode::Password ? 1 : 0;
-      const int authChoice = ctx.ui->menuLoop("Gateway Auth",
+      const int authChoice = ctx.uiRuntime->menuLoop("Gateway Auth",
                                               authItems,
                                               current,
                                               backgroundTick,
@@ -1029,13 +1029,13 @@ void runGatewayMenu(AppContext &ctx,
     if (choice == 2) {
       if (ctx.config.gatewayAuthMode == GatewayAuthMode::Password) {
         String password = ctx.config.gatewayPassword;
-        if (ctx.ui->textInput("Gateway Password", password, true, backgroundTick)) {
+        if (ctx.uiRuntime->textInput("Gateway Password", password, true, backgroundTick)) {
           ctx.config.gatewayPassword = password;
           markDirty(ctx);
         }
       } else {
         String token = ctx.config.gatewayToken;
-        if (ctx.ui->textInput("Gateway Token", token, true, backgroundTick)) {
+        if (ctx.uiRuntime->textInput("Gateway Token", token, true, backgroundTick)) {
           ctx.config.gatewayToken = token;
           markDirty(ctx);
         }
@@ -1049,7 +1049,7 @@ void runGatewayMenu(AppContext &ctx,
       ctx.config.gatewayPassword = "";
       ctx.config.gatewayDeviceToken = "";
       markDirty(ctx);
-      ctx.ui->showToast("Gateway", "Gateway config cleared", 1200, backgroundTick);
+      ctx.uiRuntime->showToast("Gateway", "Gateway config cleared", 1200, backgroundTick);
       continue;
     }
   }
@@ -1059,7 +1059,7 @@ void applyRuntimeConfig(AppContext &ctx,
                         const std::function<void()> &backgroundTick) {
   String validateErr;
   if (!validateConfig(ctx.config, &validateErr)) {
-    ctx.ui->showToast("Validation", validateErr, 1800, backgroundTick);
+    ctx.uiRuntime->showToast("Validation", validateErr, 1800, backgroundTick);
     return;
   }
 
@@ -1067,7 +1067,7 @@ void applyRuntimeConfig(AppContext &ctx,
   if (!saveConfig(ctx.config, &saveErr)) {
     String message = saveErr.isEmpty() ? String("Failed to save config") : saveErr;
     message += " / previous config kept";
-    ctx.ui->showToast("Save Error", message, 1900, backgroundTick);
+    ctx.uiRuntime->showToast("Save Error", message, 1900, backgroundTick);
     return;
   }
 
@@ -1090,11 +1090,11 @@ void applyRuntimeConfig(AppContext &ctx,
     if (!ctx.ble->connectToDevice(ctx.config.bleDeviceAddress,
                                   ctx.config.bleDeviceName,
                                   &bleErr)) {
-      ctx.ui->showToast("BLE", bleErr, 1500, backgroundTick);
+      ctx.uiRuntime->showToast("BLE", bleErr, 1500, backgroundTick);
     }
   }
 
-  ctx.ui->showToast("OpenClaw", "Saved and applied", 1400, backgroundTick);
+  ctx.uiRuntime->showToast("OpenClaw", "Saved and applied", 1400, backgroundTick);
 }
 
 std::vector<String> buildStatusLines(AppContext &ctx) {
@@ -1184,7 +1184,7 @@ void runOpenClawApp(AppContext &ctx,
     menu.push_back("Reconnect");
     menu.push_back("Back");
 
-    const int choice = ctx.ui->menuLoop("OpenClaw",
+    const int choice = ctx.uiRuntime->menuLoop("OpenClaw",
                                         menu,
                                         selected,
                                         backgroundTick,
@@ -1198,7 +1198,7 @@ void runOpenClawApp(AppContext &ctx,
     selected = choice;
 
     if (choice == 0) {
-      ctx.ui->showInfo("OpenClaw Status",
+      ctx.uiRuntime->showInfo("OpenClaw Status",
                        buildStatusLines(ctx),
                        backgroundTick,
                        "OK/BACK Exit");
@@ -1223,11 +1223,11 @@ void runOpenClawApp(AppContext &ctx,
     if (choice == 4) {
       String validateErr;
       if (!validateConfig(ctx.config, &validateErr)) {
-        ctx.ui->showToast("Config Error", validateErr, 1800, backgroundTick);
+        ctx.uiRuntime->showToast("Config Error", validateErr, 1800, backgroundTick);
         continue;
       }
       if (ctx.config.gatewayUrl.isEmpty()) {
-        ctx.ui->showToast("Config Error",
+        ctx.uiRuntime->showToast("Config Error",
                           "Set gateway URL first",
                           1600,
                           backgroundTick);
@@ -1235,25 +1235,25 @@ void runOpenClawApp(AppContext &ctx,
       }
       ctx.gateway->configure(ctx.config);
       ctx.gateway->connectNow();
-      ctx.ui->showToast("OpenClaw", "Connect requested", 1200, backgroundTick);
+      ctx.uiRuntime->showToast("OpenClaw", "Connect requested", 1200, backgroundTick);
       continue;
     }
 
     if (choice == 5) {
       ctx.gateway->disconnectNow();
-      ctx.ui->showToast("OpenClaw", "Disconnected", 1200, backgroundTick);
+      ctx.uiRuntime->showToast("OpenClaw", "Disconnected", 1200, backgroundTick);
       continue;
     }
 
     if (choice == 6) {
       String validateErr;
       if (!validateConfig(ctx.config, &validateErr)) {
-        ctx.ui->showToast("Config Error", validateErr, 1800, backgroundTick);
+        ctx.uiRuntime->showToast("Config Error", validateErr, 1800, backgroundTick);
         continue;
       }
       ctx.gateway->configure(ctx.config);
       ctx.gateway->reconnectNow();
-      ctx.ui->showToast("OpenClaw", "Reconnect requested", 1400, backgroundTick);
+      ctx.uiRuntime->showToast("OpenClaw", "Reconnect requested", 1400, backgroundTick);
       continue;
     }
   }

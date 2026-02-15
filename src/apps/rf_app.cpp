@@ -5,7 +5,7 @@
 #include <vector>
 
 #include "../core/cc1101_radio.h"
-#include "../ui/ui_shell.h"
+#include "../ui/ui_runtime.h"
 
 namespace {
 
@@ -166,24 +166,24 @@ void showRadioInfo(AppContext &ctx,
     lines.push_back("RSSI: " + String(rssi) + " dBm");
   }
 
-  ctx.ui->showInfo("RF Info", lines, backgroundTick, "OK/BACK Exit");
+  ctx.uiRuntime->showInfo("RF Info", lines, backgroundTick, "OK/BACK Exit");
 }
 
 void editFrequency(AppContext &ctx,
                    const std::function<void()> &backgroundTick) {
   String value = String(getCc1101FrequencyMhz(), 2);
-  if (!ctx.ui->textInput("RF Frequency MHz", value, false, backgroundTick)) {
+  if (!ctx.uiRuntime->textInput("RF Frequency MHz", value, false, backgroundTick)) {
     return;
   }
 
   float mhz = 0.0f;
   if (!parseFloatToken(value, mhz)) {
-    ctx.ui->showToast("RF", "Invalid frequency", 1300, backgroundTick);
+    ctx.uiRuntime->showToast("RF", "Invalid frequency", 1300, backgroundTick);
     return;
   }
 
   setCc1101FrequencyMhz(mhz);
-  ctx.ui->showToast("RF",
+  ctx.uiRuntime->showToast("RF",
                     "Frequency set " + String(getCc1101FrequencyMhz(), 2) + " MHz",
                     1300,
                     backgroundTick);
@@ -200,7 +200,7 @@ void chooseModulation(AppContext &ctx,
   menu.push_back("4: MSK");
 
   int selected = cfg.modulation <= 4 ? static_cast<int>(cfg.modulation) : 0;
-  const int choice = ctx.ui->menuLoop("RF / Modulation",
+  const int choice = ctx.uiRuntime->menuLoop("RF / Modulation",
                                        menu,
                                        selected,
                                        backgroundTick,
@@ -222,7 +222,7 @@ void choosePacketFormat(AppContext &ctx,
   menu.push_back("3: Async Serial");
 
   int selected = cfg.packetFormat <= 3 ? static_cast<int>(cfg.packetFormat) : 0;
-  const int choice = ctx.ui->menuLoop("RF / Packet Format",
+  const int choice = ctx.uiRuntime->menuLoop("RF / Packet Format",
                                        menu,
                                        selected,
                                        backgroundTick,
@@ -244,7 +244,7 @@ void chooseLengthConfig(AppContext &ctx,
   menu.push_back("3: Reserved");
 
   int selected = cfg.lengthConfig <= 3 ? static_cast<int>(cfg.lengthConfig) : 1;
-  const int choice = ctx.ui->menuLoop("RF / Length Mode",
+  const int choice = ctx.uiRuntime->menuLoop("RF / Length Mode",
                                        menu,
                                        selected,
                                        backgroundTick,
@@ -265,7 +265,7 @@ void chooseSyncMode(AppContext &ctx,
   }
 
   int selected = cfg.syncMode <= 7 ? static_cast<int>(cfg.syncMode) : 2;
-  const int choice = ctx.ui->menuLoop("RF / Sync Mode",
+  const int choice = ctx.uiRuntime->menuLoop("RF / Sync Mode",
                                        menu,
                                        selected,
                                        backgroundTick,
@@ -282,13 +282,13 @@ void editUint8Value(AppContext &ctx,
                     uint8_t &target,
                     const std::function<void()> &backgroundTick) {
   String value = String(target);
-  if (!ctx.ui->textInput(title, value, false, backgroundTick)) {
+  if (!ctx.uiRuntime->textInput(title, value, false, backgroundTick)) {
     return;
   }
 
   int parsed = 0;
   if (!parseIntToken(value, parsed) || parsed < 0 || parsed > 255) {
-    ctx.ui->showToast("RF", "Invalid number", 1200, backgroundTick);
+    ctx.uiRuntime->showToast("RF", "Invalid number", 1200, backgroundTick);
     return;
   }
   target = static_cast<uint8_t>(parsed);
@@ -299,13 +299,13 @@ void editFloatValue(AppContext &ctx,
                     float &target,
                     const std::function<void()> &backgroundTick) {
   String value = String(target, 3);
-  if (!ctx.ui->textInput(title, value, false, backgroundTick)) {
+  if (!ctx.uiRuntime->textInput(title, value, false, backgroundTick)) {
     return;
   }
 
   float parsed = 0.0f;
   if (!parseFloatToken(value, parsed)) {
-    ctx.ui->showToast("RF", "Invalid number", 1200, backgroundTick);
+    ctx.uiRuntime->showToast("RF", "Invalid number", 1200, backgroundTick);
     return;
   }
   target = parsed;
@@ -334,7 +334,7 @@ void runPacketProfileMenu(AppContext &ctx,
     menu.push_back("Reset Defaults");
     menu.push_back("Back");
 
-    const int choice = ctx.ui->menuLoop("RF / Packet Profile",
+    const int choice = ctx.uiRuntime->menuLoop("RF / Packet Profile",
                                         menu,
                                         selected,
                                         backgroundTick,
@@ -373,16 +373,16 @@ void runPacketProfileMenu(AppContext &ctx,
     } else if (choice == 12) {
       String err;
       if (!configureCc1101Packet(working, err)) {
-        ctx.ui->showToast("RF Apply",
+        ctx.uiRuntime->showToast("RF Apply",
                           err.isEmpty() ? String("Apply failed") : err,
                           1700,
                           backgroundTick);
       } else {
-        ctx.ui->showToast("RF Apply", "Packet profile applied", 1200, backgroundTick);
+        ctx.uiRuntime->showToast("RF Apply", "Packet profile applied", 1200, backgroundTick);
       }
     } else if (choice == 13) {
       working = Cc1101PacketConfig{};
-      ctx.ui->showToast("RF", "Default profile loaded", 1200, backgroundTick);
+      ctx.uiRuntime->showToast("RF", "Default profile loaded", 1200, backgroundTick);
     }
   }
 }
@@ -390,47 +390,47 @@ void runPacketProfileMenu(AppContext &ctx,
 void sendPacketText(AppContext &ctx,
                     const std::function<void()> &backgroundTick) {
   String text;
-  if (!ctx.ui->textInput("Packet Text", text, false, backgroundTick)) {
+  if (!ctx.uiRuntime->textInput("Packet Text", text, false, backgroundTick)) {
     return;
   }
   if (text.isEmpty()) {
-    ctx.ui->showToast("RF TX", "Text is empty", 1200, backgroundTick);
+    ctx.uiRuntime->showToast("RF TX", "Text is empty", 1200, backgroundTick);
     return;
   }
 
   String delayMs = "25";
-  if (!ctx.ui->textInput("TX Delay ms", delayMs, false, backgroundTick)) {
+  if (!ctx.uiRuntime->textInput("TX Delay ms", delayMs, false, backgroundTick)) {
     return;
   }
 
   int txDelay = 25;
   if (!parseIntToken(delayMs, txDelay)) {
-    ctx.ui->showToast("RF TX", "Invalid delay", 1200, backgroundTick);
+    ctx.uiRuntime->showToast("RF TX", "Invalid delay", 1200, backgroundTick);
     return;
   }
 
   String err;
   if (!sendCc1101PacketText(text, txDelay, err)) {
-    ctx.ui->showToast("RF TX",
+    ctx.uiRuntime->showToast("RF TX",
                       err.isEmpty() ? String("TX failed") : err,
                       1700,
                       backgroundTick);
     return;
   }
 
-  ctx.ui->showToast("RF TX", "Packet sent", 1000, backgroundTick);
+  ctx.uiRuntime->showToast("RF TX", "Packet sent", 1000, backgroundTick);
 }
 
 void receivePacketOnce(AppContext &ctx,
                        const std::function<void()> &backgroundTick) {
   String timeoutInput = "5000";
-  if (!ctx.ui->textInput("RX Timeout ms", timeoutInput, false, backgroundTick)) {
+  if (!ctx.uiRuntime->textInput("RX Timeout ms", timeoutInput, false, backgroundTick)) {
     return;
   }
 
   int timeoutMs = 0;
   if (!parseIntToken(timeoutInput, timeoutMs)) {
-    ctx.ui->showToast("RF RX", "Invalid timeout", 1200, backgroundTick);
+    ctx.uiRuntime->showToast("RF RX", "Invalid timeout", 1200, backgroundTick);
     return;
   }
 
@@ -438,7 +438,7 @@ void receivePacketOnce(AppContext &ctx,
   int rssi = 0;
   String err;
   if (!receiveCc1101Packet(packet, timeoutMs, &rssi, err)) {
-    ctx.ui->showToast("RF RX",
+    ctx.uiRuntime->showToast("RF RX",
                       err.isEmpty() ? String("No packet") : err,
                       1600,
                       backgroundTick);
@@ -452,7 +452,7 @@ void receivePacketOnce(AppContext &ctx,
   lines.push_back("HEX:");
   appendHexLines(packet, lines);
 
-  ctx.ui->showInfo("RF RX Packet", lines, backgroundTick, "OK/BACK Exit");
+  ctx.uiRuntime->showInfo("RF RX Packet", lines, backgroundTick, "OK/BACK Exit");
 }
 
 void readRssi(AppContext &ctx,
@@ -460,11 +460,11 @@ void readRssi(AppContext &ctx,
   String err;
   const int rssi = readCc1101RssiDbm(&err);
   if (!err.isEmpty()) {
-    ctx.ui->showToast("RF RSSI", err, 1500, backgroundTick);
+    ctx.uiRuntime->showToast("RF RSSI", err, 1500, backgroundTick);
     return;
   }
 
-  ctx.ui->showToast("RF RSSI", String(rssi) + " dBm", 1200, backgroundTick);
+  ctx.uiRuntime->showToast("RF RSSI", String(rssi) + " dBm", 1200, backgroundTick);
 }
 
 void sendOok(AppContext &ctx,
@@ -475,11 +475,11 @@ void sendOok(AppContext &ctx,
   String protoInput = "1";
   String repeatInput = "10";
 
-  if (!ctx.ui->textInput("OOK Code", codeInput, false, backgroundTick) ||
-      !ctx.ui->textInput("Bits", bitsInput, false, backgroundTick) ||
-      !ctx.ui->textInput("PulseLen", pulseInput, false, backgroundTick) ||
-      !ctx.ui->textInput("Protocol", protoInput, false, backgroundTick) ||
-      !ctx.ui->textInput("Repeat", repeatInput, false, backgroundTick)) {
+  if (!ctx.uiRuntime->textInput("OOK Code", codeInput, false, backgroundTick) ||
+      !ctx.uiRuntime->textInput("Bits", bitsInput, false, backgroundTick) ||
+      !ctx.uiRuntime->textInput("PulseLen", pulseInput, false, backgroundTick) ||
+      !ctx.uiRuntime->textInput("Protocol", protoInput, false, backgroundTick) ||
+      !ctx.uiRuntime->textInput("Repeat", repeatInput, false, backgroundTick)) {
     return;
   }
 
@@ -494,7 +494,7 @@ void sendOok(AppContext &ctx,
       !parseIntToken(pulseInput, pulse) ||
       !parseIntToken(protoInput, proto) ||
       !parseIntToken(repeatInput, repeat)) {
-    ctx.ui->showToast("OOK TX", "Invalid value", 1300, backgroundTick);
+    ctx.uiRuntime->showToast("OOK TX", "Invalid value", 1300, backgroundTick);
     return;
   }
 
@@ -505,14 +505,14 @@ void sendOok(AppContext &ctx,
                       proto,
                       repeat,
                       err)) {
-    ctx.ui->showToast("OOK TX",
+    ctx.uiRuntime->showToast("OOK TX",
                       err.isEmpty() ? String("TX failed") : err,
                       1700,
                       backgroundTick);
     return;
   }
 
-  ctx.ui->showToast("OOK TX", "Signal sent", 1000, backgroundTick);
+  ctx.uiRuntime->showToast("OOK TX", "Signal sent", 1000, backgroundTick);
 }
 
 }  // namespace
@@ -532,7 +532,7 @@ void runRfApp(AppContext &ctx,
     menu.push_back("OOK TX (RCSwitch)");
     menu.push_back("Back");
 
-    const int choice = ctx.ui->menuLoop("RF",
+    const int choice = ctx.uiRuntime->menuLoop("RF",
                                         menu,
                                         selected,
                                         backgroundTick,
@@ -545,7 +545,7 @@ void runRfApp(AppContext &ctx,
     selected = choice;
 
     if (!isCc1101Ready()) {
-      ctx.ui->showToast("RF", "CC1101 not initialized", 1500, backgroundTick);
+      ctx.uiRuntime->showToast("RF", "CC1101 not initialized", 1500, backgroundTick);
       continue;
     }
 
