@@ -19,7 +19,7 @@
 
 // Optional APPMarket defaults.
 // Format: owner/repo (example: myorg/myfirmware)
-#define USER_APPMARKET_GITHUB_REPO ""
+#define USER_APPMARKET_GITHUB_REPO "HITEYY/AI-cc1101"
 // Release asset file name (example: t-embed-cc1101.bin)
 #define USER_APPMARKET_RELEASE_ASSET ""
 

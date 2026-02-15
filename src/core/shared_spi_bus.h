@@ -7,7 +7,7 @@ namespace sharedspi {
 
 void prepareChipSelects();
 void init();
-void adoptInitializedBus();
+void adoptInitializedBus(SPIClass *externalBus = nullptr);
 SPIClass *bus();
 
 }  // namespace sharedspi

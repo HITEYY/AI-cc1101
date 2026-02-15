@@ -26,6 +26,11 @@ class UiRuntime {
   void setLanguage(UiLanguage language);
   UiLanguage language() const;
 
+  int launcherLoop(const String &title,
+                   const std::vector<String> &items,
+                   int selectedIndex,
+                   const std::function<void()> &backgroundTick);
+
   int menuLoop(const String &title,
                const std::vector<String> &items,
                int selectedIndex,

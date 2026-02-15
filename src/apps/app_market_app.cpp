@@ -25,6 +25,7 @@ namespace {
 constexpr const char *kAppMarketDir = "/appmarket";
 constexpr const char *kLatestPackagePath = "/appmarket/latest.bin";
 constexpr const char *kBackupPackagePath = "/appmarket/current_backup.bin";
+constexpr const char *kPinnedRepoSlug = "HITEYY/AI-cc1101";
 constexpr size_t kTransferChunkBytes = 2048;
 constexpr unsigned long kDownloadIdleTimeoutMs = 12000UL;
 
@@ -33,6 +34,18 @@ struct ReleaseInfo {
   String assetName;
   String downloadUrl;
   uint32_t size = 0;
+};
+
+struct ReleaseAssetEntry {
+  String name;
+  String downloadUrl;
+  uint32_t size = 0;
+};
+
+struct ReleaseBrowseEntry {
+  String tag;
+  bool prerelease = false;
+  std::vector<ReleaseAssetEntry> assets;
 };
 
 struct FsEntry {
@@ -251,27 +264,9 @@ String normalizeRepoSlug(const String &rawInput) {
 bool resolveRepoSlug(const RuntimeConfig &config,
                      String &repoOut,
                      String *error) {
-  repoOut = normalizeRepoSlug(config.appMarketGithubRepo);
-  if (repoOut.isEmpty()) {
-    if (error) {
-      *error = "Set GitHub repo first (owner/repo)";
-    }
-    return false;
-  }
-
-  const int slash = repoOut.indexOf('/');
-  if (slash <= 0 || slash >= static_cast<int>(repoOut.length()) - 1) {
-    if (error) {
-      *error = "Repo format must be owner/repo";
-    }
-    return false;
-  }
-  if (repoOut.indexOf('/', static_cast<unsigned int>(slash + 1)) >= 0) {
-    if (error) {
-      *error = "Repo format must be owner/repo";
-    }
-    return false;
-  }
+  (void)config;
+  (void)error;
+  repoOut = kPinnedRepoSlug;
   return true;
 }
 
@@ -427,6 +422,195 @@ bool fetchLatestReleaseInfo(const RuntimeConfig &config,
     return false;
   }
   return true;
+}
+
+bool parseReleaseCatalogBody(const String &body,
+                             std::vector<ReleaseBrowseEntry> &releasesOut,
+                             String *error) {
+  releasesOut.clear();
+
+  DynamicJsonDocument doc(65536);
+  const auto parseErr = deserializeJson(doc, body);
+  if (parseErr || !doc.is<JsonArray>()) {
+    if (error) {
+      *error = "Release list parse failed";
+    }
+    return false;
+  }
+
+  const JsonArrayConst roots = doc.as<JsonArrayConst>();
+  for (JsonObjectConst root : roots) {
+    if (root["draft"] | false) {
+      continue;
+    }
+
+    ReleaseBrowseEntry release;
+    release.tag = String(static_cast<const char *>(root["tag_name"] | ""));
+    if (release.tag.isEmpty()) {
+      release.tag = String(static_cast<const char *>(root["name"] | ""));
+    }
+    if (release.tag.isEmpty()) {
+      release.tag = "(unknown)";
+    }
+    release.prerelease = root["prerelease"] | false;
+
+    if (!root["assets"].is<JsonArrayConst>()) {
+      continue;
+    }
+    const JsonArrayConst assets = root["assets"].as<JsonArrayConst>();
+    for (JsonObjectConst assetRoot : assets) {
+      ReleaseAssetEntry asset;
+      asset.name = String(static_cast<const char *>(assetRoot["name"] | ""));
+      asset.downloadUrl =
+          String(static_cast<const char *>(assetRoot["browser_download_url"] | ""));
+      asset.size = assetRoot["size"] | 0;
+      if (asset.name.isEmpty() || asset.downloadUrl.isEmpty()) {
+        continue;
+      }
+      release.assets.push_back(asset);
+    }
+
+    if (release.assets.empty()) {
+      continue;
+    }
+    releasesOut.push_back(release);
+    if (releasesOut.size() >= 8) {
+      break;
+    }
+  }
+
+  if (releasesOut.empty()) {
+    if (error) {
+      *error = "No releases with assets";
+    }
+    return false;
+  }
+  return true;
+}
+
+bool fetchReleaseCatalog(const RuntimeConfig &config,
+                         std::vector<ReleaseBrowseEntry> &releasesOut,
+                         String *error) {
+  String repo;
+  if (!resolveRepoSlug(config, repo, error)) {
+    return false;
+  }
+
+  const String url = "https://api.github.com/repos/" + repo + "/releases?per_page=8";
+  String body;
+  int code = -1;
+  String httpErr;
+  if (!httpGetSecure(url, body, code, &httpErr)) {
+    if (error) {
+      *error = httpErr;
+    }
+    return false;
+  }
+
+  return parseReleaseCatalogBody(body, releasesOut, error);
+}
+
+String releaseMenuLabel(const ReleaseBrowseEntry &release) {
+  String label = release.tag;
+  if (release.prerelease) {
+    label += " (pre)";
+  }
+  label += " [";
+  label += String(static_cast<unsigned int>(release.assets.size()));
+  label += "]";
+  return label;
+}
+
+String releaseAssetMenuLabel(const ReleaseAssetEntry &asset) {
+  String label = hasBinExtension(asset.name) ? "[BIN] " : "[FILE] ";
+  label += asset.name;
+  label += " (";
+  label += formatBytes(asset.size);
+  label += ")";
+  return label;
+}
+
+int preferredAssetIndex(const ReleaseBrowseEntry &release,
+                        const String &preferredAssetNameRaw) {
+  String preferredAssetName = preferredAssetNameRaw;
+  preferredAssetName.trim();
+  if (!preferredAssetName.isEmpty()) {
+    for (size_t i = 0; i < release.assets.size(); ++i) {
+      if (release.assets[i].name == preferredAssetName) {
+        return static_cast<int>(i);
+      }
+    }
+  }
+  for (size_t i = 0; i < release.assets.size(); ++i) {
+    if (hasBinExtension(release.assets[i].name)) {
+      return static_cast<int>(i);
+    }
+  }
+  return 0;
+}
+
+bool browseReleaseAsset(AppContext &ctx,
+                        ReleaseInfo &infoOut,
+                        const std::function<void()> &backgroundTick,
+                        String *error) {
+  std::vector<ReleaseBrowseEntry> releases;
+  if (!fetchReleaseCatalog(ctx.config, releases, error)) {
+    return false;
+  }
+
+  int releaseSelected = 0;
+  while (true) {
+    std::vector<String> releaseMenu;
+    releaseMenu.reserve(releases.size() + 1);
+    for (size_t i = 0; i < releases.size(); ++i) {
+      releaseMenu.push_back(trimMiddle(releaseMenuLabel(releases[i]), 38));
+    }
+    releaseMenu.push_back("Back");
+
+    const int releaseChoice = ctx.uiRuntime->menuLoop("Browse Releases",
+                                              releaseMenu,
+                                              releaseSelected,
+                                              backgroundTick,
+                                              "OK Select  BACK Exit",
+                                              "Repo: " +
+                                                  trimMiddle(String(kPinnedRepoSlug), 22));
+    if (releaseChoice < 0 ||
+        releaseChoice == static_cast<int>(releases.size())) {
+      return false;
+    }
+    releaseSelected = releaseChoice;
+
+    const ReleaseBrowseEntry &release = releases[static_cast<size_t>(releaseChoice)];
+    int assetSelected = preferredAssetIndex(release, ctx.config.appMarketReleaseAsset);
+
+    while (true) {
+      std::vector<String> assetMenu;
+      assetMenu.reserve(release.assets.size() + 1);
+      for (size_t i = 0; i < release.assets.size(); ++i) {
+        assetMenu.push_back(trimMiddle(releaseAssetMenuLabel(release.assets[i]), 40));
+      }
+      assetMenu.push_back("Back");
+
+      const int assetChoice = ctx.uiRuntime->menuLoop("Release Assets",
+                                             assetMenu,
+                                             assetSelected,
+                                             backgroundTick,
+                                             "OK Select  BACK Up",
+                                             "Tag: " + trimMiddle(release.tag, 22));
+      if (assetChoice < 0 ||
+          assetChoice == static_cast<int>(release.assets.size())) {
+        break;
+      }
+
+      assetSelected = assetChoice;
+      const ReleaseAssetEntry &asset = release.assets[static_cast<size_t>(assetChoice)];
+      infoOut.tag = release.tag;
+      infoOut.assetName = asset.name;
+      infoOut.downloadUrl = asset.downloadUrl;
+      infoOut.size = asset.size;
+      return true;
+    }
+  }
 }
 
 bool downloadUrlToSdFile(const String &url,
@@ -946,6 +1130,9 @@ void markDirty(AppContext &ctx) {
 
 void saveAppMarketConfig(AppContext &ctx,
                          const std::function<void()> &backgroundTick) {
+  // APPMarket repository is fixed for this firmware build.
+  ctx.config.appMarketGithubRepo = kPinnedRepoSlug;
+
   String validateErr;
   if (!validateConfig(ctx.config, &validateErr)) {
     ctx.uiRuntime->showToast("Validation", validateErr, 1800, backgroundTick);
@@ -970,7 +1157,7 @@ void showStatus(AppContext &ctx,
                 const String &lastTag,
                 const String &lastAsset,
                 const std::function<void()> &backgroundTick) {
-  String repo = normalizeRepoSlug(ctx.config.appMarketGithubRepo);
+  const String repo = kPinnedRepoSlug;
 
   uint32_t latestSize = 0;
   uint32_t backupSize = 0;
@@ -983,7 +1170,7 @@ void showStatus(AppContext &ctx,
 
   std::vector<String> lines;
   lines.push_back("Wi-Fi: " + String(WiFi.status() == WL_CONNECTED ? "Connected" : "Disconnected"));
-  lines.push_back("Repo: " + (repo.isEmpty() ? String("(empty)") : repo));
+  lines.push_back("Repo: " + repo + " (fixed)");
   lines.push_back("Asset: " +
                   (ctx.config.appMarketReleaseAsset.isEmpty()
                        ? String("(auto .bin)")
@@ -1037,9 +1224,9 @@ void runAppMarketApp(AppContext &ctx,
 
     std::vector<String> menu;
     menu.push_back("Status");
-    menu.push_back("GitHub Repo");
     menu.push_back("Release Asset");
     menu.push_back("Check Latest");
+    menu.push_back("Browse Releases");
     menu.push_back("Download Latest to SD");
     menu.push_back(String("Install Latest ") +
                    (latestExists ? "(" + formatBytes(latestSize) + ")" : "(missing)"));
@@ -1051,12 +1238,7 @@ void runAppMarketApp(AppContext &ctx,
     menu.push_back("Save Config");
     menu.push_back("Back");
 
-    String subtitle = normalizeRepoSlug(ctx.config.appMarketGithubRepo);
-    if (subtitle.isEmpty()) {
-      subtitle = "Set repo: owner/repo";
-    } else {
-      subtitle = trimMiddle(subtitle, 22);
-    }
+    String subtitle = "Repo: " + trimMiddle(String(kPinnedRepoSlug), 22);
     if (ctx.configDirty) {
       subtitle += " *DIRTY";
     }
@@ -1078,19 +1260,6 @@ void runAppMarketApp(AppContext &ctx,
     }
 
     if (choice == 1) {
-      String value = ctx.config.appMarketGithubRepo;
-      if (!ctx.uiRuntime->textInput("GitHub Repo (owner/repo)", value, false, backgroundTick)) {
-        continue;
-      }
-      value = normalizeRepoSlug(value);
-      ctx.config.appMarketGithubRepo = value;
-      markDirty(ctx);
-      lastAction = "Repo updated";
-      ctx.uiRuntime->showToast("APPMarket", "Repo updated", 1200, backgroundTick);
-      continue;
-    }
-
-    if (choice == 2) {
       String value = ctx.config.appMarketReleaseAsset;
       if (!ctx.uiRuntime->textInput("Release Asset (.bin)", value, false, backgroundTick)) {
         continue;
@@ -1103,7 +1272,7 @@ void runAppMarketApp(AppContext &ctx,
       continue;
     }
 
-    if (choice == 3) {
+    if (choice == 2) {
       ReleaseInfo info;
       String err;
       if (!fetchLatestReleaseInfo(ctx.config, info, &err)) {
@@ -1123,6 +1292,67 @@ void runAppMarketApp(AppContext &ctx,
       lines.push_back("URL:");
       lines.push_back(trimMiddle(info.downloadUrl, 38));
       ctx.uiRuntime->showInfo("Latest Release", lines, backgroundTick, "OK/BACK Exit");
+      continue;
+    }
+
+    if (choice == 3) {
+      ReleaseInfo info;
+      String err;
+      if (!browseReleaseAsset(ctx, info, backgroundTick, &err)) {
+        if (!err.isEmpty()) {
+          lastAction = "Browse failed: " + err;
+          ctx.uiRuntime->showToast("APPMarket", err, 1800, backgroundTick);
+        }
+        continue;
+      }
+
+      std::vector<String> lines;
+      lines.push_back("Tag: " + info.tag);
+      lines.push_back("Asset: " + info.assetName);
+      lines.push_back("Size: " + formatBytes(info.size));
+      lines.push_back("URL:");
+      lines.push_back(trimMiddle(info.downloadUrl, 38));
+      ctx.uiRuntime->showInfo("Selected Release", lines, backgroundTick, "OK/BACK Next");
+
+      if (!ctx.uiRuntime->confirm("Download Selected",
+                                  "Save selected asset to /appmarket/latest.bin?",
+                                  backgroundTick,
+                                  "Download",
+                                  "Cancel")) {
+        lastTag = info.tag;
+        lastAsset = info.assetName;
+        lastAction = "Selected " + info.assetName + " (download canceled)";
+        continue;
+      }
+
+      uint32_t downloaded = 0;
+      {
+        OverlayScope overlay(ctx.uiRuntime, "APPMarket", "Preparing download...", -1);
+        if (!downloadUrlToSdFile(info.downloadUrl,
+                                 kLatestPackagePath,
+                                 backgroundTick,
+                                 [&](uint32_t written, int total) {
+                                   int percent = -1;
+                                   String progressText = "Downloading " + formatBytes(written);
+                                   if (total > 0) {
+                                     percent = static_cast<int>((static_cast<uint64_t>(written) * 100ULL) /
+                                                                static_cast<uint64_t>(total));
+                                     progressText += " / " + formatBytes(static_cast<uint32_t>(total));
+                                   }
+                                   overlay.update("APPMarket", progressText, percent);
+                                 },
+                                 &downloaded,
+                                 &err)) {
+          lastAction = "Browse download failed: " + err;
+          ctx.uiRuntime->showToast("APPMarket", err, 1800, backgroundTick);
+          continue;
+        }
+      }
+
+      lastTag = info.tag;
+      lastAsset = info.assetName;
+      lastAction = "Downloaded " + info.assetName + " (" + formatBytes(downloaded) + ")";
+      ctx.uiRuntime->showToast("APPMarket", "Downloaded selected release", 1500, backgroundTick);
       continue;
     }
 

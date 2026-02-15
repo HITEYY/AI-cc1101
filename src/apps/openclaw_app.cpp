@@ -1158,10 +1158,30 @@ std::vector<String> buildStatusLines(AppContext &ctx) {
   return lines;
 }
 
+void ensureGatewayAutoConnectOnEnter(AppContext &ctx) {
+  String validateErr;
+  if (!validateConfig(ctx.config, &validateErr)) {
+    return;
+  }
+  if (ctx.config.gatewayUrl.isEmpty() || !hasGatewayCredentials(ctx.config)) {
+    return;
+  }
+
+  const GatewayStatus gs = ctx.gateway->status();
+  if (gs.gatewayReady || gs.wsConnected || gs.shouldConnect) {
+    return;
+  }
+
+  ctx.gateway->configure(ctx.config);
+  ctx.gateway->connectNow();
+}
+
 }  // namespace
 
 void runOpenClawApp(AppContext &ctx,
                     const std::function<void()> &backgroundTick) {
+  ensureGatewayAutoConnectOnEnter(ctx);
+
   int selected = 0;
 
   while (true) {
@@ -1179,9 +1199,6 @@ void runOpenClawApp(AppContext &ctx,
     menu.push_back("Gateway");
     menu.push_back("Messenger");
     menu.push_back("Save & Apply");
-    menu.push_back("Connect");
-    menu.push_back("Disconnect");
-    menu.push_back("Reconnect");
     menu.push_back("Back");
 
     const int choice = ctx.uiRuntime->menuLoop("OpenClaw",
@@ -1191,7 +1208,7 @@ void runOpenClawApp(AppContext &ctx,
                                         "OK Select  BACK Exit",
                                         subtitle);
 
-    if (choice < 0 || choice == 7) {
+    if (choice < 0 || choice == 4) {
       return;
     }
 
@@ -1217,43 +1234,6 @@ void runOpenClawApp(AppContext &ctx,
 
     if (choice == 3) {
       applyRuntimeConfig(ctx, backgroundTick);
-      continue;
-    }
-
-    if (choice == 4) {
-      String validateErr;
-      if (!validateConfig(ctx.config, &validateErr)) {
-        ctx.uiRuntime->showToast("Config Error", validateErr, 1800, backgroundTick);
-        continue;
-      }
-      if (ctx.config.gatewayUrl.isEmpty()) {
-        ctx.uiRuntime->showToast("Config Error",
-                          "Set gateway URL first",
-                          1600,
-                          backgroundTick);
-        continue;
-      }
-      ctx.gateway->configure(ctx.config);
-      ctx.gateway->connectNow();
-      ctx.uiRuntime->showToast("OpenClaw", "Connect requested", 1200, backgroundTick);
-      continue;
-    }
-
-    if (choice == 5) {
-      ctx.gateway->disconnectNow();
-      ctx.uiRuntime->showToast("OpenClaw", "Disconnected", 1200, backgroundTick);
-      continue;
-    }
-
-    if (choice == 6) {
-      String validateErr;
-      if (!validateConfig(ctx.config, &validateErr)) {
-        ctx.uiRuntime->showToast("Config Error", validateErr, 1800, backgroundTick);
-        continue;
-      }
-      ctx.gateway->configure(ctx.config);
-      ctx.gateway->reconnectNow();
-      ctx.uiRuntime->showToast("OpenClaw", "Reconnect requested", 1400, backgroundTick);
       continue;
     }
   }

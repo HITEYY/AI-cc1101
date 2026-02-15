@@ -9,6 +9,7 @@ constexpr uint8_t kMiso = 10;
 constexpr uint8_t kMosi = 9;
 
 bool gInited = false;
+SPIClass *gBus = &SPI;
 
 }  // namespace
 
@@ -29,18 +30,21 @@ void init() {
   }
 
   prepareChipSelects();
-  SPI.begin(kSck, kMiso, kMosi);
+  gBus->begin(kSck, kMiso, kMosi);
   gInited = true;
 }
 
-void adoptInitializedBus() {
+void adoptInitializedBus(SPIClass *externalBus) {
+  if (externalBus) {
+    gBus = externalBus;
+  }
   prepareChipSelects();
   gInited = true;
 }
 
 SPIClass *bus() {
   init();
-  return &SPI;
+  return gBus;
 }
 
 }  // namespace sharedspi

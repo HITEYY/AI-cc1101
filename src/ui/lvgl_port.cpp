@@ -42,7 +42,7 @@ bool LvglPort::begin() {
   digitalWrite(boardpins::kTftCs, HIGH);
 
   tft_.init();
-  sharedspi::adoptInitializedBus();
+  sharedspi::adoptInitializedBus(&TFT_eSPI::getSPIinstance());
   tft_.setRotation(3);
   tft_.fillScreen(TFT_BLACK);
   tft_.setSwapBytes(true);
