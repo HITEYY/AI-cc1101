@@ -52,25 +52,25 @@ const char *textEn(UiTextKey key) {
 const char *textKo(UiTextKey key) {
   switch (key) {
     case UiTextKey::OkSelectBackExit:
-      return "OK 선택  BACK 종료";
+      return "OK Select  BACK Exit";
     case UiTextKey::OkBackExit:
-      return "OK/BACK 종료";
+      return "OK/BACK Exit";
     case UiTextKey::OkBackClose:
-      return "OK/BACK 닫기";
+      return "OK/BACK Close";
     case UiTextKey::BackExit:
-      return "BACK 종료";
+      return "BACK Exit";
     case UiTextKey::BackCancel:
-      return "BACK 취소";
+      return "BACK Cancel";
     case UiTextKey::Select:
-      return "선택";
+      return "Select";
     case UiTextKey::Launcher:
-      return "런처";
+      return "Launcher";
     case UiTextKey::Settings:
-      return "설정";
+      return "Setting";
     case UiTextKey::FileExplorer:
-      return "파일 탐색기";
+      return "File Explorer";
     case UiTextKey::AppMarket:
-      return "앱마켓";
+      return "APPMarket";
     case UiTextKey::Rf:
       return "RF";
     case UiTextKey::Nfc:
@@ -80,17 +80,17 @@ const char *textKo(UiTextKey key) {
     case UiTextKey::Nrf24:
       return "NRF24";
     case UiTextKey::OpenClaw:
-      return "오픈클로";
+      return "OpenClaw";
     case UiTextKey::Language:
-      return "언어";
+      return "Language";
     case UiTextKey::English:
-      return "영어";
+      return "English";
     case UiTextKey::Korean:
-      return "한국어";
+      return "Korean";
     case UiTextKey::Saved:
-      return "저장됨";
+      return "Saved";
     case UiTextKey::UnsavedChanges:
-      return "저장되지 않은 변경";
+      return "Unsaved changes";
     default:
       return "";
   }
@@ -120,4 +120,3 @@ const char *uiLanguageLabel(UiLanguage lang) {
 const char *uiText(UiLanguage lang, UiTextKey key) {
   return lang == UiLanguage::Korean ? textKo(key) : textEn(key);
 }
-

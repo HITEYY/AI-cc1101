@@ -146,6 +146,10 @@ void initBoardPower() {
   digitalWrite(boardpins::kPowerEnable, HIGH);
   delay(30);
 
+  // Ensure TFT backlight is enabled after cold boot/wakeup.
+  pinMode(boardpins::kTftBacklight, OUTPUT);
+  analogWrite(boardpins::kTftBacklight, 255);
+
   Wire.begin(8, 18);
   if (gPmu.init(Wire, 8, 18, BQ25896_SLAVE_ADDRESS)) {
     gPmu.resetDefault();
@@ -195,6 +199,7 @@ void setup() {
   if (!loadConfig(gAppContext.config, &configLoadSource, nullptr, &loadErr)) {
     gAppContext.config = makeDefaultConfig();
   }
+  Serial.printf("[boot] cfg.uiLanguage=%s\n", gAppContext.config.uiLanguage.c_str());
   gUiRuntime.setLanguage(uiLanguageFromConfigCode(gAppContext.config.uiLanguage));
 
   gWifi.begin();

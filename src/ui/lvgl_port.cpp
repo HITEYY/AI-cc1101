@@ -32,15 +32,27 @@ bool LvglPort::begin() {
     return true;
   }
 
-  sharedspi::init();
+  sharedspi::prepareChipSelects();
+
+  // Backlight can remain off after deep sleep; force it on when LVGL starts.
+  pinMode(boardpins::kTftBacklight, OUTPUT);
+  analogWrite(boardpins::kTftBacklight, 255);
 
   pinMode(boardpins::kTftCs, OUTPUT);
   digitalWrite(boardpins::kTftCs, HIGH);
 
   tft_.init();
+  sharedspi::adoptInitializedBus();
   tft_.setRotation(3);
   tft_.fillScreen(TFT_BLACK);
   tft_.setSwapBytes(true);
+  tft_.setTextColor(TFT_WHITE, TFT_RED);
+  tft_.setTextDatum(TL_DATUM);
+
+  auto showFatal = [&](const char *msg) {
+    tft_.fillScreen(TFT_RED);
+    tft_.drawString(msg, 4, 4, 2);
+  };
 
   lv_init();
 
@@ -51,12 +63,19 @@ bool LvglPort::begin() {
 
   buf1_ = static_cast<lv_color_t *>(allocateBuffer(bufBytes));
   buf2_ = static_cast<lv_color_t *>(allocateBuffer(bufBytes));
-  if (!buf1_ || !buf2_) {
+  if (!buf1_) {
+    Serial.println("[ui] LVGL draw buffer alloc failed");
+    showFatal("LVGL buf1 alloc failed");
     return false;
+  }
+  if (!buf2_) {
+    Serial.println("[ui] LVGL second buffer alloc failed, falling back to single buffer");
   }
 
   display_ = lv_display_create(static_cast<int32_t>(width), static_cast<int32_t>(height));
   if (!display_) {
+    Serial.println("[ui] LVGL display create failed");
+    showFatal("LVGL display create failed");
     return false;
   }
 
@@ -122,4 +141,3 @@ void LvglPort::flushCb(lv_display_t *disp, const lv_area_t *area, uint8_t *pxMap
 
   lv_display_flush_ready(disp);
 }
-

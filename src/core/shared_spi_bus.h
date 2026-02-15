@@ -7,6 +7,7 @@ namespace sharedspi {
 
 void prepareChipSelects();
 void init();
+void adoptInitializedBus();
 SPIClass *bus();
 
 }  // namespace sharedspi

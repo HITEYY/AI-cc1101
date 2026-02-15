@@ -582,6 +582,7 @@ UiRuntime::UiRuntime() : impl_(new Impl()) {}
 
 void UiRuntime::begin() {
   if (!impl_->begin()) {
+    Serial.println("[ui] runtime begin failed");
     return;
   }
 
@@ -598,7 +599,8 @@ void UiRuntime::begin() {
   lv_obj_align(label, LV_ALIGN_CENTER, 0, 0);
 
   impl_->service(nullptr);
-  delay(120);
+  delay(40);
+  impl_->service(nullptr);
 }
 
 void UiRuntime::tick() {

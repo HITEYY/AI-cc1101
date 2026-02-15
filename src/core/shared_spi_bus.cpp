@@ -33,6 +33,11 @@ void init() {
   gInited = true;
 }
 
+void adoptInitializedBus() {
+  prepareChipSelects();
+  gInited = true;
+}
+
 SPIClass *bus() {
   init();
   return &SPI;
