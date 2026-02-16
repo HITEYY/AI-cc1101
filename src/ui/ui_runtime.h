@@ -12,6 +12,9 @@ struct UiEvent {
   bool ok = false;
   bool back = false;
   bool okLong = false;
+  uint8_t okCount = 0;
+  uint8_t backCount = 0;
+  uint8_t okLongCount = 0;
 };
 
 enum class MessengerAction : uint8_t {

@@ -9,8 +9,15 @@ constexpr uint8_t kPinEncoderB = boardpins::kEncoderB;
 constexpr uint8_t kPinOk = boardpins::kEncoderOk;
 constexpr uint8_t kPinBack = boardpins::kEncoderBack;
 
-constexpr unsigned long kDebounceMs = 35UL;
+constexpr unsigned long kDebounceMs = 20UL;
 constexpr unsigned long kLongPressMs = 750UL;
+
+uint8_t saturatingInc(uint8_t value) {
+  if (value == 0xFFU) {
+    return value;
+  }
+  return static_cast<uint8_t>(value + 1U);
+}
 
 }  // namespace
 
@@ -95,6 +102,7 @@ void InputAdapter::tick() {
   if (!okPressed && okPrev_) {
     if (!okLongFired_ && now - okPressedAt_ >= kDebounceMs) {
       pendingEvent_.ok = true;
+      pendingEvent_.okCount = saturatingInc(pendingEvent_.okCount);
       enqueueKeyPressRelease(LV_KEY_ENTER);
     }
     okPressedAt_ = 0;
@@ -104,6 +112,8 @@ void InputAdapter::tick() {
       now - okPressedAt_ >= kLongPressMs) {
     pendingEvent_.back = true;
     pendingEvent_.okLong = true;
+    pendingEvent_.backCount = saturatingInc(pendingEvent_.backCount);
+    pendingEvent_.okLongCount = saturatingInc(pendingEvent_.okLongCount);
     enqueueKeyPressRelease(LV_KEY_ESC);
     okLongFired_ = true;
   }
@@ -116,6 +126,7 @@ void InputAdapter::tick() {
   if (!backPressed && backPrev_) {
     if (now - backPressedAt_ >= kDebounceMs) {
       pendingEvent_.back = true;
+      pendingEvent_.backCount = saturatingInc(pendingEvent_.backCount);
       enqueueKeyPressRelease(LV_KEY_ESC);
     }
     backPressedAt_ = 0;

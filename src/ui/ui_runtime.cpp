@@ -45,6 +45,7 @@ constexpr unsigned long kHeaderRefreshMs = 1000UL;
 constexpr unsigned long kBatteryPollMs = 5000UL;
 constexpr unsigned long kNtpRetryMs = 30000UL;
 constexpr unsigned long kSdPollMs = 8000UL;
+constexpr unsigned long kUiLoopDelayMs = 2UL;
 
 constexpr uint32_t kLauncherBg = kClrBg;
 constexpr uint32_t kLauncherPrimary = 0xEAF6FF;
@@ -158,6 +159,15 @@ class UiRuntime::Impl {
   lv_obj_t *progressSpinner = nullptr;
   lv_obj_t *progressBar = nullptr;
   lv_obj_t *progressPercent = nullptr;
+  String textInputCacheTitle;
+  String textInputCachePreview;
+  std::vector<lv_area_t> textInputCacheAreas;
+  std::vector<lv_obj_t *> textInputCacheButtons;
+  std::vector<lv_obj_t *> textInputCacheLabels;
+  std::vector<String> textInputCacheKeyLabels;
+  int textInputCacheSelected = -1;
+  int textInputCacheCapsIndex = -1;
+  unsigned long textInputLastFullRenderMs = 0;
 
   bool begin() {
     if (!port.begin()) {
@@ -212,9 +222,12 @@ class UiRuntime::Impl {
     const InputEvent ev = input.pollEvent();
     UiEvent out;
     out.delta = ev.delta;
-    out.ok = ev.ok;
-    out.back = ev.back;
-    out.okLong = ev.okLong;
+    out.ok = ev.ok || ev.okCount > 0;
+    out.back = ev.back || ev.backCount > 0;
+    out.okLong = ev.okLong || ev.okLongCount > 0;
+    out.okCount = ev.okCount;
+    out.backCount = ev.backCount;
+    out.okLongCount = ev.okLongCount;
     return out;
   }
 
@@ -584,6 +597,50 @@ class UiRuntime::Impl {
     progressPercent = nullptr;
   }
 
+  void clearTextInputHandles() {
+    textInputCacheTitle = "";
+    textInputCachePreview = "";
+    textInputCacheAreas.clear();
+    textInputCacheButtons.clear();
+    textInputCacheLabels.clear();
+    textInputCacheKeyLabels.clear();
+    textInputCacheSelected = -1;
+    textInputCacheCapsIndex = -1;
+    textInputLastFullRenderMs = 0;
+  }
+
+  bool textInputLayoutMatches(const std::vector<lv_area_t> &areas) const {
+    if (textInputCacheAreas.size() != areas.size()) {
+      return false;
+    }
+    for (size_t i = 0; i < areas.size(); ++i) {
+      const lv_area_t &cached = textInputCacheAreas[i];
+      const lv_area_t &next = areas[i];
+      if (cached.x1 != next.x1 ||
+          cached.y1 != next.y1 ||
+          cached.x2 != next.x2 ||
+          cached.y2 != next.y2) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  bool textInputWidgetsValid() const {
+    if (textInputCacheButtons.size() != textInputCacheLabels.size()) {
+      return false;
+    }
+    for (size_t i = 0; i < textInputCacheButtons.size(); ++i) {
+      if (!textInputCacheButtons[i] ||
+          !textInputCacheLabels[i] ||
+          !lv_obj_is_valid(textInputCacheButtons[i]) ||
+          !lv_obj_is_valid(textInputCacheLabels[i])) {
+        return false;
+      }
+    }
+    return true;
+  }
+
   void renderBase(const String &title,
                   const String &subtitle,
                   const String &footer,
@@ -593,6 +650,7 @@ class UiRuntime::Impl {
 
     lv_obj_t *screen = lv_screen_active();
     clearProgressHandles();
+    clearTextInputHandles();
     lv_obj_clean(screen);
     disableScroll(screen);
     lv_obj_set_style_bg_color(screen, lv_color_hex(kClrBg), 0);
@@ -819,42 +877,43 @@ class UiRuntime::Impl {
       buttonH = 18;
     }
 
-    const int sectionGap = 8;
+    const int sectionGap = 4;
     int boxAvailH = contentH - buttonH - sectionGap;
     if (boxAvailH < 24) {
       boxAvailH = 24;
     }
 
-    int boxSide = boxAvailH;
-    const int maxBoxW = w - 24;
-    if (boxSide > maxBoxW) {
-      boxSide = maxBoxW;
+    const int boxX = 4;
+    const int boxW = w - 8;
+    const int boxY = contentTop;
+    int boxH = boxAvailH;
+    int buttonY = boxY + boxH + sectionGap;
+    if (buttonY + buttonH - 1 > contentBottom) {
+      buttonY = contentBottom - buttonH + 1;
     }
-    if (boxSide < 28) {
-      boxSide = 28;
+    if (buttonY < contentTop) {
+      buttonY = contentTop;
     }
-
-    int boxX = (w - boxSide) / 2;
-    if (boxX < 4) {
-      boxX = 4;
-    }
-    int boxY = contentTop + (boxAvailH - boxSide) / 2;
-    if (boxY < contentTop) {
-      boxY = contentTop;
+    boxH = buttonY - sectionGap - boxY;
+    if (boxH < 1) {
+      boxH = 1;
     }
 
     lv_obj_t *box = lv_obj_create(lv_screen_active());
     disableScroll(box);
     lv_obj_remove_style_all(box);
     lv_obj_set_pos(box, boxX, boxY);
-    lv_obj_set_size(box, boxSide, boxSide);
-    lv_obj_set_style_radius(box, 6, kStyleAny);
-    lv_obj_set_style_bg_color(box, lv_color_hex(kClrPanelSoft), kStyleAny);
-    lv_obj_set_style_bg_opa(box, kOpa92, kStyleAny);
-    lv_obj_set_style_border_width(box, 2, kStyleAny);
-    lv_obj_set_style_border_color(box, lv_color_hex(kClrAccent), kStyleAny);
-    lv_obj_set_style_border_opa(box, LV_OPA_COVER, kStyleAny);
-    lv_obj_set_style_pad_all(box, 0, kStyleAny);
+    lv_obj_set_size(box, boxW, boxH);
+    lv_obj_set_style_radius(box, 6, 0);
+    lv_obj_set_style_bg_color(box, lv_color_hex(kClrPanelSoft), 0);
+    lv_obj_set_style_bg_opa(box, kOpa85, 0);
+    lv_obj_set_style_border_width(box, 1, 0);
+    lv_obj_set_style_border_color(box, lv_color_hex(kClrBorder), 0);
+    lv_obj_set_style_border_side(box, LV_BORDER_SIDE_FULL, 0);
+    lv_obj_set_style_border_opa(box, LV_OPA_COVER, 0);
+    lv_obj_set_style_outline_width(box, 0, 0);
+    lv_obj_set_style_outline_opa(box, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_pad_all(box, 0, 0);
 
     size_t lineCount = previewLines.size();
     if (lineCount == 0) {
@@ -866,19 +925,28 @@ class UiRuntime::Impl {
     const int lineGap = 2;
     int textTotalH = static_cast<int>(lineCount) * lineHeight +
                      static_cast<int>(lineCount > 0 ? (lineCount - 1) * lineGap : 0);
-    int textStartY = (boxSide - textTotalH) / 2;
+    int textStartY = (boxH - textTotalH) / 2;
     if (textStartY < 6) {
       textStartY = 6;
     }
 
     for (size_t i = 0; i < lineCount; ++i) {
       lv_obj_t *line = lv_label_create(box);
-      setSingleLineLabel(line, boxSide - 12, LV_TEXT_ALIGN_LEFT);
-      if (previewLines.empty()) {
-        lv_label_set_text(line, "(no messages)");
-      } else {
-        lv_label_set_text(line, previewLines[i].c_str());
+      setSingleLineLabel(line, boxW - 12, LV_TEXT_ALIGN_LEFT);
+      size_t maxChars = 6;
+      if (boxW > 20) {
+        maxChars = static_cast<size_t>((boxW - 14) / 7);
+        if (maxChars < 6) {
+          maxChars = 6;
+        }
       }
+      String lineText;
+      if (previewLines.empty()) {
+        lineText = "(no messages)";
+      } else {
+        lineText = previewLines[i];
+      }
+      lv_label_set_text(line, ellipsize(lineText, maxChars).c_str());
       lv_obj_set_style_text_color(line, lv_color_hex(kClrTextPrimary), 0);
       lv_obj_set_pos(line, 6, textStartY + static_cast<int>(i) * (lineHeight + lineGap));
     }
@@ -886,14 +954,6 @@ class UiRuntime::Impl {
     const int kButtonCount = 3;
     const char *buttonLabels[kButtonCount] = {"Text", "Voice", "File"};
     const int safeSelected = wrapIndex(selected, kButtonCount);
-
-    int buttonY = contentTop + boxAvailH + sectionGap;
-    if (buttonY + buttonH - 1 > contentBottom) {
-      buttonY = contentBottom - buttonH + 1;
-    }
-    if (buttonY < contentTop) {
-      buttonY = contentTop;
-    }
 
     int rowX = 10;
     int rowW = w - 20;
@@ -915,26 +975,31 @@ class UiRuntime::Impl {
       const int btnX = rowX + i * (buttonW + buttonGap);
       lv_obj_set_pos(btn, btnX, buttonY);
       lv_obj_set_size(btn, buttonW, buttonH);
-      lv_obj_set_style_radius(btn, 8, kStyleAny);
-      lv_obj_set_style_border_width(btn, 2, kStyleAny);
-      lv_obj_set_style_pad_all(btn, 0, kStyleAny);
-      lv_obj_set_style_bg_opa(btn, LV_OPA_COVER, kStyleAny);
-      lv_obj_set_style_border_opa(btn, LV_OPA_COVER, kStyleAny);
+      lv_obj_set_style_radius(btn, 6, 0);
+      lv_obj_set_style_border_width(btn, 1, 0);
+      lv_obj_set_style_border_side(btn, LV_BORDER_SIDE_FULL, 0);
+      lv_obj_set_style_pad_all(btn, 0, 0);
+      lv_obj_set_style_bg_opa(btn, kOpa85, 0);
+      lv_obj_set_style_border_opa(btn, LV_OPA_COVER, 0);
+      lv_obj_set_style_outline_width(btn, 0, 0);
+      lv_obj_set_style_outline_opa(btn, LV_OPA_TRANSP, 0);
 
       const bool isSelected = i == safeSelected;
       lv_obj_set_style_bg_color(btn,
-                                isSelected ? lv_color_hex(kClrAccentSoft) : lv_color_hex(kClrPanel),
-                                kStyleAny);
+                                isSelected ? lv_color_hex(kClrPanel) : lv_color_hex(kClrPanelSoft),
+                                0);
       lv_obj_set_style_border_color(btn,
-                                    isSelected ? lv_color_hex(kClrAccent)
-                                               : lv_color_hex(kClrTextMuted),
-                                    kStyleAny);
+                                    isSelected ? lv_color_hex(kClrAccent) : lv_color_hex(kClrBorder),
+                                    0);
 
       lv_obj_t *label = lv_label_create(btn);
-      setSingleLineLabel(label, buttonW - 6, LV_TEXT_ALIGN_CENTER);
+      setSingleLineLabel(label, buttonW, LV_TEXT_ALIGN_CENTER);
+      lv_obj_set_width(label, LV_PCT(100));
+      lv_obj_set_height(label, static_cast<int>(font()->line_height + 2));
+      lv_obj_set_style_text_align(label, LV_TEXT_ALIGN_CENTER, 0);
       lv_label_set_text(label, buttonLabels[i]);
       lv_obj_set_style_text_color(label, lv_color_hex(kClrTextPrimary), kStyleAny);
-      lv_obj_center(label);
+      lv_obj_align(label, LV_ALIGN_CENTER, 0, 0);
     }
 
     service(nullptr);
@@ -1221,57 +1286,180 @@ class UiRuntime::Impl {
                        int selected,
                        int selectedCapsIndex,
                        const std::vector<lv_area_t> &areas) {
-    int contentTop = 0;
-    int contentBottom = 0;
-    renderBase(title,
-               preview,
-               "ROTATE Move   OK Type   BACK",
-               contentTop,
-               contentBottom);
-
     const size_t keyCount = keyLabels.size();
-    for (size_t i = 0; i < keyCount; ++i) {
-      const lv_area_t &a = areas[i];
-      lv_obj_t *btn = lv_button_create(lv_screen_active());
-      disableScroll(btn);
-      lv_obj_remove_style_all(btn);
-      lv_obj_set_pos(btn, a.x1, a.y1);
-      lv_obj_set_size(btn,
-                      static_cast<int32_t>(a.x2 - a.x1 + 1),
-                      static_cast<int32_t>(a.y2 - a.y1 + 1));
+    if (keyCount == 0 || areas.size() != keyCount) {
+      return;
+    }
 
-      bool isSelected = selected == static_cast<int>(i);
-      bool isCapsActive = selectedCapsIndex == static_cast<int>(i);
+    const unsigned long now = millis();
+    const bool periodicRefresh =
+        textInputLastFullRenderMs == 0 || now - textInputLastFullRenderMs >= kHeaderRefreshMs;
+    const bool needFullRender =
+        periodicRefresh ||
+        textInputCacheTitle != title ||
+        textInputCachePreview != preview ||
+        textInputCacheButtons.size() != keyCount ||
+        textInputCacheLabels.size() != keyCount ||
+        !textInputLayoutMatches(areas) ||
+        !textInputWidgetsValid();
+
+    if (needFullRender) {
+      int contentTop = 0;
+      int contentBottom = 0;
+      renderBase(title,
+                 preview,
+                 "ROTATE Move   OK Type   BACK",
+                 contentTop,
+                 contentBottom);
+
+      textInputCacheTitle = title;
+      textInputCachePreview = preview;
+      textInputCacheAreas = areas;
+      textInputCacheButtons.clear();
+      textInputCacheLabels.clear();
+      textInputCacheKeyLabels.clear();
+      textInputCacheButtons.reserve(keyCount);
+      textInputCacheLabels.reserve(keyCount);
+      textInputCacheKeyLabels.reserve(keyCount);
+
+      for (size_t i = 0; i < keyCount; ++i) {
+        const lv_area_t &a = areas[i];
+        lv_obj_t *btn = lv_button_create(lv_screen_active());
+        disableScroll(btn);
+        lv_obj_remove_style_all(btn);
+        lv_obj_set_pos(btn, a.x1, a.y1);
+        lv_obj_set_size(btn,
+                        static_cast<int32_t>(a.x2 - a.x1 + 1),
+                        static_cast<int32_t>(a.y2 - a.y1 + 1));
+
+        lv_obj_t *label = lv_label_create(btn);
+        setSingleLineLabel(label,
+                           static_cast<int>(a.x2 - a.x1 + 1),
+                           LV_TEXT_ALIGN_CENTER);
+        lv_obj_set_width(label, LV_PCT(100));
+        lv_obj_set_style_text_align(label, LV_TEXT_ALIGN_CENTER, 0);
+        lv_obj_align(label, LV_ALIGN_CENTER, 0, 0);
+
+        textInputCacheButtons.push_back(btn);
+        textInputCacheLabels.push_back(label);
+        textInputCacheKeyLabels.push_back("");
+      }
+
+      textInputCacheSelected = -1;
+      textInputCacheCapsIndex = -1;
+      textInputLastFullRenderMs = now;
+    }
+
+    for (size_t i = 0; i < keyCount; ++i) {
+      lv_obj_t *btn = textInputCacheButtons[i];
+      lv_obj_t *label = textInputCacheLabels[i];
+      if (!btn || !label || !lv_obj_is_valid(btn) || !lv_obj_is_valid(label)) {
+        clearTextInputHandles();
+        return;
+      }
+    }
+
+    bool labelsChanged = needFullRender;
+    if (!labelsChanged && textInputCacheKeyLabels.size() == keyCount) {
+      for (size_t i = 0; i < keyCount; ++i) {
+        if (textInputCacheKeyLabels[i] != keyLabels[i]) {
+          labelsChanged = true;
+          break;
+        }
+      }
+    } else if (!labelsChanged) {
+      labelsChanged = true;
+    }
+
+    if (labelsChanged) {
+      textInputCacheKeyLabels.assign(keyLabels.begin(), keyLabels.end());
+      for (size_t i = 0; i < keyCount; ++i) {
+        lv_obj_t *label = textInputCacheLabels[i];
+        lv_label_set_text(label, keyLabels[i].c_str());
+      }
+    }
+
+    auto applyButtonStyle = [&](int index) {
+      if (index < 0 || index >= static_cast<int>(keyCount)) {
+        return;
+      }
+      lv_obj_t *btn = textInputCacheButtons[static_cast<size_t>(index)];
+      lv_obj_t *label = textInputCacheLabels[static_cast<size_t>(index)];
+
+      const bool isSelected = selected == index;
+      const bool isCapsActive = selectedCapsIndex == index;
 
       lv_color_t bg = lv_color_hex(kClrPanel);
       lv_color_t fg = lv_color_hex(kClrTextPrimary);
+      lv_color_t border = lv_color_hex(kClrTextMuted);
+      int borderWidth = 1;
+      int outlineWidth = 0;
+      lv_opa_t outlineOpa = LV_OPA_TRANSP;
 
       if (isCapsActive) {
         bg = lv_color_hex(0x2A4F8C);
-        fg = lv_color_hex(kClrTextPrimary);
+        border = lv_color_hex(0x83AEE8);
       }
       if (isSelected) {
-        bg = lv_color_hex(kClrAccentSoft);
-        fg = lv_color_hex(kClrTextPrimary);
+        bg = lv_color_hex(0x2B4E75);
+        border = lv_color_hex(0xCBE2FF);
+        borderWidth = 2;
+        outlineWidth = 1;
+        outlineOpa = static_cast<lv_opa_t>(180);
       }
 
-      lv_obj_set_style_bg_color(btn, bg, kStyleAny);
-      lv_obj_set_style_bg_opa(btn, LV_OPA_COVER, kStyleAny);
-      lv_obj_set_style_border_width(btn, 1, kStyleAny);
-      lv_obj_set_style_border_color(btn,
-                                    isSelected ? lv_color_hex(kClrAccent) : lv_color_hex(kClrBorder),
-                                    kStyleAny);
-      lv_obj_set_style_radius(btn, 4, kStyleAny);
-      lv_obj_set_style_pad_all(btn, 0, kStyleAny);
+      lv_obj_set_style_bg_color(btn, bg, 0);
+      lv_obj_set_style_bg_opa(btn, LV_OPA_COVER, 0);
+      lv_obj_set_style_border_width(btn, borderWidth, 0);
+      lv_obj_set_style_border_color(btn, border, 0);
+      lv_obj_set_style_border_side(btn, LV_BORDER_SIDE_FULL, 0);
+      lv_obj_set_style_border_opa(btn, LV_OPA_COVER, 0);
+      lv_obj_set_style_outline_width(btn, outlineWidth, 0);
+      lv_obj_set_style_outline_color(btn, lv_color_hex(kClrAccent), 0);
+      lv_obj_set_style_outline_opa(btn, outlineOpa, 0);
+      lv_obj_set_style_outline_pad(btn, 0, 0);
+      lv_obj_set_style_radius(btn, 4, 0);
+      lv_obj_set_style_pad_all(btn, 0, 0);
 
-      lv_obj_t *label = lv_label_create(btn);
-      setSingleLineLabel(label,
-                         static_cast<int>(a.x2 - a.x1),
-                         LV_TEXT_ALIGN_CENTER);
-      lv_label_set_text(label, keyLabels[i].c_str());
       lv_obj_set_style_text_color(label, fg, kStyleAny);
-      lv_obj_center(label);
+      lv_obj_set_width(label, LV_PCT(100));
+      lv_obj_set_style_text_align(label, LV_TEXT_ALIGN_CENTER, 0);
+      lv_obj_align(label, LV_ALIGN_CENTER, 0, 0);
+    };
+
+    if (needFullRender) {
+      for (size_t i = 0; i < keyCount; ++i) {
+        applyButtonStyle(static_cast<int>(i));
+      }
+    } else {
+      int dirty[4] = {-1, -1, -1, -1};
+      int dirtyCount = 0;
+      auto pushDirty = [&](int idx) {
+        if (idx < 0 || idx >= static_cast<int>(keyCount)) {
+          return;
+        }
+        for (int n = 0; n < dirtyCount; ++n) {
+          if (dirty[n] == idx) {
+            return;
+          }
+        }
+        if (dirtyCount < 4) {
+          dirty[dirtyCount++] = idx;
+        }
+      };
+
+      pushDirty(textInputCacheSelected);
+      pushDirty(selected);
+      pushDirty(textInputCacheCapsIndex);
+      pushDirty(selectedCapsIndex);
+
+      for (int n = 0; n < dirtyCount; ++n) {
+        applyButtonStyle(dirty[n]);
+      }
     }
+
+    textInputCacheSelected = selected;
+    textInputCacheCapsIndex = selectedCapsIndex;
 
     service(nullptr);
   }
@@ -1523,7 +1711,7 @@ int UiRuntime::launcherLoop(const String &title,
     UiEvent ev = pollInput();
 
     if (ev.delta != 0) {
-      selected = wrapIndex(selected + (ev.delta > 0 ? 1 : -1),
+      selected = wrapIndex(selected + ev.delta,
                            static_cast<int>(items.size()));
       redraw = true;
     }
@@ -1534,7 +1722,7 @@ int UiRuntime::launcherLoop(const String &title,
       return -1;
     }
 
-    delay(10);
+    delay(kUiLoopDelayMs);
   }
 }
 
@@ -1564,7 +1752,7 @@ int UiRuntime::menuLoop(const String &title,
     UiEvent ev = pollInput();
 
     if (ev.delta != 0) {
-      selected = wrapIndex(selected + (ev.delta > 0 ? 1 : -1),
+      selected = wrapIndex(selected + ev.delta,
                            static_cast<int>(items.size()));
       redraw = true;
     }
@@ -1575,7 +1763,7 @@ int UiRuntime::menuLoop(const String &title,
       return -1;
     }
 
-    delay(10);
+    delay(kUiLoopDelayMs);
   }
 }
 
@@ -1599,7 +1787,7 @@ MessengerAction UiRuntime::messengerHomeLoop(const std::vector<String> &previewL
     UiEvent ev = pollInput();
 
     if (ev.delta != 0) {
-      selected = wrapIndex(selected + (ev.delta > 0 ? 1 : -1), kButtonCount);
+      selected = wrapIndex(selected + ev.delta, kButtonCount);
       redraw = true;
     }
 
@@ -1621,7 +1809,7 @@ MessengerAction UiRuntime::messengerHomeLoop(const std::vector<String> &previewL
       return MessengerAction::Back;
     }
 
-    delay(10);
+    delay(kUiLoopDelayMs);
   }
 }
 
@@ -1645,7 +1833,7 @@ void UiRuntime::showInfo(const String &title,
     UiEvent ev = pollInput();
 
     if (ev.delta != 0) {
-      int next = startIndex + (ev.delta > 0 ? 1 : -1);
+      int next = startIndex + ev.delta;
       if (next < 0) {
         next = 0;
       }
@@ -1665,7 +1853,7 @@ void UiRuntime::showInfo(const String &title,
       return;
     }
 
-    delay(10);
+    delay(kUiLoopDelayMs);
   }
 }
 
@@ -1749,24 +1937,54 @@ bool UiRuntime::textInput(const String &title,
     fullRowWidth = maxColumns * keyWidth + (maxColumns - 1) * keyGap;
   }
 
-  const int contentTop = kHeaderHeight + kSubtitleHeight + 2;
-  int contentBottom = displayHeight - kFooterHeight - 2;
-  if (contentBottom <= contentTop) {
-    contentBottom = contentTop + 60;
+  // Keep keyboard area aligned with renderBase() content bounds so it never
+  // overlaps the preview subtitle or footer hint bar.
+  int contentTop = 4 + kHeaderHeight + 4;
+  contentTop += kSubtitleHeight + 4;  // textInput always shows preview subtitle
+  contentTop += 2;
+
+  int contentBottom = displayHeight - 6;
+  const int footerY = displayHeight - kFooterHeight - 4;  // textInput always shows footer
+  contentBottom = footerY - 4;
+  if (contentBottom > displayHeight - 6) {
+    contentBottom = displayHeight - 6;
   }
+  if (contentBottom < contentTop + kMinContentHeight) {
+    contentBottom = contentTop + kMinContentHeight;
+    if (contentBottom > displayHeight - 6) {
+      contentBottom = displayHeight - 6;
+    }
+  }
+  if (contentBottom < contentTop) {
+    contentBottom = contentTop;
+  }
+
   const int availableHeight = contentBottom - contentTop + 1;
   const int rowCount = 5;
+  int maxFitKeyHeight = (availableHeight - (keyGap * (rowCount - 1))) / rowCount;
+  if (maxFitKeyHeight < 1) {
+    maxFitKeyHeight = 1;
+  }
   int keyHeight = (availableHeight - (keyGap * (rowCount - 1))) / rowCount;
+  if (keyHeight > 24) {
+    keyHeight = 24;
+  }
   if (keyHeight < 12) {
     keyHeight = 12;
   }
-  if (keyHeight > 24) {
-    keyHeight = 24;
+  if (keyHeight > maxFitKeyHeight) {
+    keyHeight = maxFitKeyHeight;
   }
   const int keyboardHeight = rowCount * keyHeight + (rowCount - 1) * keyGap;
   int keyboardTop = contentTop + (availableHeight - keyboardHeight) / 2;
   if (keyboardTop < contentTop) {
     keyboardTop = contentTop;
+  }
+  if (keyboardTop + keyboardHeight - 1 > contentBottom) {
+    keyboardTop = contentBottom - keyboardHeight + 1;
+    if (keyboardTop < contentTop) {
+      keyboardTop = contentTop;
+    }
   }
   int keyboardLeft = (displayWidth - fullRowWidth) / 2;
   if (keyboardLeft < 2) {
@@ -1894,7 +2112,7 @@ bool UiRuntime::textInput(const String &title,
     UiEvent ev = pollInput();
 
     if (ev.delta != 0) {
-      selected = wrapIndex(selected + (ev.delta > 0 ? 1 : -1),
+      selected = wrapIndex(selected + ev.delta,
                            static_cast<int>(keys.size()));
       redraw = true;
     }
@@ -1903,7 +2121,13 @@ bool UiRuntime::textInput(const String &title,
       return false;
     }
 
-    if (ev.ok) {
+    uint8_t okPresses = ev.okCount;
+    if (okPresses == 0 && ev.ok) {
+      okPresses = 1;
+    }
+
+    while (okPresses > 0) {
+      --okPresses;
       const KeySlot &slot = keys[static_cast<size_t>(selected)];
       if (slot.action == KeyAction::Character) {
         working += caps ? slot.shifted : slot.normal;
@@ -1927,7 +2151,7 @@ bool UiRuntime::textInput(const String &title,
       }
     }
 
-    delay(10);
+    delay(kUiLoopDelayMs);
   }
 }
 
@@ -1961,6 +2185,6 @@ void UiRuntime::showToast(const String &title,
       return;
     }
 
-    delay(10);
+    delay(kUiLoopDelayMs);
   }
 }

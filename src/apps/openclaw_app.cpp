@@ -862,8 +862,15 @@ std::vector<ChatEntry> collectChatEntries(AppContext &ctx) {
   return entries;
 }
 
-std::vector<String> buildMessengerPreviewLines(const std::vector<ChatEntry> &entries) {
+std::vector<String> buildMessengerPreviewLines(AppContext &ctx,
+                                               const std::vector<ChatEntry> &entries) {
   std::vector<String> lines;
+  String status = "GW:";
+  status += ctx.gateway->status().gatewayReady ? "READY" : "DOWN";
+  status += " Msg:";
+  status += String(static_cast<unsigned long>(entries.size()));
+  lines.push_back(status);
+
   if (entries.empty()) {
     lines.push_back("(no messages)");
     return lines;
@@ -871,7 +878,7 @@ std::vector<String> buildMessengerPreviewLines(const std::vector<ChatEntry> &ent
 
   const int total = static_cast<int>(entries.size());
   for (int i = total - 1; i >= 0 && static_cast<int>(lines.size()) < 3; --i) {
-    lines.push_back(makeChatPreview(entries[static_cast<size_t>(i)]));
+    lines.push_back(trimMiddle(makeChatPreview(entries[static_cast<size_t>(i)]), 14));
   }
   return lines;
 }
@@ -882,7 +889,7 @@ void runMessagingMenu(AppContext &ctx,
 
   while (true) {
     std::vector<ChatEntry> entries = collectChatEntries(ctx);
-    std::vector<String> previewLines = buildMessengerPreviewLines(entries);
+    std::vector<String> previewLines = buildMessengerPreviewLines(ctx, entries);
     const MessengerAction action = ctx.uiRuntime->messengerHomeLoop(previewLines,
                                                                     selected,
                                                                     backgroundTick);
