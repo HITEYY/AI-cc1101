@@ -177,8 +177,14 @@ void BleManager::begin() {
 }
 
 void BleManager::configure(const RuntimeConfig &config) {
+  const String prevDeviceName = effectiveDeviceName(config_);
   const String prevSavedAddress = config_.bleDeviceAddress;
   config_ = config;
+
+  const String nextDeviceName = effectiveDeviceName(config_);
+  if (initialized_ && prevDeviceName != nextDeviceName) {
+    NimBLEDevice::setDeviceName(std::string(nextDeviceName.c_str()));
+  }
 
   if (connected_ && !prevSavedAddress.equalsIgnoreCase(config_.bleDeviceAddress) &&
       !connectedAddress_.equalsIgnoreCase(config_.bleDeviceAddress)) {
@@ -294,6 +300,7 @@ bool BleManager::scanDevices(std::vector<BleDeviceInfo> &outDevices,
 bool BleManager::connectToDevice(const String &address,
                                  const String &name,
                                  String *error) {
+  (void)name;
   if (!ensureInitialized(error)) {
     return false;
   }
@@ -344,7 +351,7 @@ bool BleManager::connectToDevice(const String &address,
   client_ = nextClient;
   connected_ = true;
   connectedAddress_ = address;
-  connectedName_ = name.isEmpty() ? connectedAddress_ : name;
+  connectedName_ = effectiveDeviceName(config_);
   connectedRssi_ = client_->getRssi();
 
   analyzeConnectedProfile();
@@ -676,7 +683,7 @@ BleStatus BleManager::status() const {
   state.initialized = initialized_;
   state.scanning = scanning_;
   state.connected = connected_;
-  state.deviceName = connected_ ? connectedName_ : config_.bleDeviceName;
+  state.deviceName = effectiveDeviceName(config_);
   state.deviceAddress = connected_ ? connectedAddress_ : config_.bleDeviceAddress;
   state.rssi = connectedRssi_;
   state.profile = connectedProfile_;
@@ -697,7 +704,8 @@ bool BleManager::ensureInitialized(String *error) {
     return true;
   }
 
-  NimBLEDevice::init("");
+  const String deviceName = effectiveDeviceName(config_);
+  NimBLEDevice::init(std::string(deviceName.c_str()));
   NimBLEDevice::setSecurityAuth(true, true, true);
   NimBLEDevice::setSecurityIOCap(BLE_HS_IO_KEYBOARD_ONLY);
   NimBLEDevice::setSecurityPasskey(123456);

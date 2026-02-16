@@ -92,6 +92,7 @@ class GatewayClient {
   unsigned long lastConnectAttemptMs_ = 0;
   unsigned long lastConnectOkMs_ = 0;
   unsigned long lastTelemetryMs_ = 0;
+  unsigned long connectAttemptStartedMs_ = 0;
 
   InvokeRequestHandler invokeHandler_;
   TelemetryBuilder telemetryBuilder_;
@@ -137,4 +138,5 @@ class GatewayClient {
   bool connectSent_ = false;
   bool connectUsedDeviceToken_ = false;
   bool connectCanFallbackToShared_ = false;
+  uint8_t tlsFailStreak_ = 0;
 };

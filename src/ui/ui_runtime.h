@@ -34,6 +34,7 @@ class UiRuntime {
   void tick();
   UiEvent pollInput();
   void resetInputState();
+  void setOkBackBlocked(bool blocked);
 
   void setStatusLine(const String &line);
 

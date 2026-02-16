@@ -239,6 +239,15 @@ String displayBrightnessLabel(uint8_t percent) {
   return label;
 }
 
+String deviceNameLabel(const RuntimeConfig &config) {
+  String name = effectiveDeviceName(config);
+  constexpr size_t kMaxLabelLen = 15;
+  if (name.length() > kMaxLabelLen) {
+    name = name.substring(0, kMaxLabelLen - 3) + "...";
+  }
+  return "Device Name: " + name;
+}
+
 void showBleKeyboardInput(AppContext &ctx,
                           const std::function<void()> &backgroundTick) {
   const BleStatus bs = ctx.ble->status();
@@ -314,7 +323,7 @@ void scanAndConnectBle(AppContext &ctx,
 
   const BleDeviceInfo &device = devices[static_cast<size_t>(choice)];
   String connectErr;
-  if (!ctx.ble->connectToDevice(device.address, device.name, &connectErr)) {
+  if (!ctx.ble->connectToDevice(device.address, effectiveDeviceName(ctx.config), &connectErr)) {
     ctx.uiRuntime->showToast("BLE Connect",
                       connectErr.isEmpty() ? String("BLE connect failed")
                                            : connectErr,
@@ -324,7 +333,6 @@ void scanAndConnectBle(AppContext &ctx,
   }
 
   ctx.config.bleDeviceAddress = device.address;
-  ctx.config.bleDeviceName = device.name;
   markDirty(ctx);
 
   const BleStatus status = ctx.ble->status();
@@ -354,7 +362,6 @@ void runBleMenu(AppContext &ctx,
     menu.push_back("Keyboard Input View");
     menu.push_back("Clear Keyboard Input");
     menu.push_back("Edit Device Addr");
-    menu.push_back("Edit Device Name");
     menu.push_back(String("Auto Connect: ") +
                    (ctx.config.bleAutoConnect ? "On" : "Off"));
     menu.push_back("Forget Saved");
@@ -366,7 +373,7 @@ void runBleMenu(AppContext &ctx,
                                         backgroundTick,
                                         "OK Select  BACK Exit",
                                         buildBleSubtitle(ctx));
-    if (choice < 0 || choice == 9) {
+    if (choice < 0 || choice == 8) {
       return;
     }
     selected = choice;
@@ -384,7 +391,7 @@ void runBleMenu(AppContext &ctx,
 
       String connectErr;
       if (!ctx.ble->connectToDevice(ctx.config.bleDeviceAddress,
-                                    ctx.config.bleDeviceName,
+                                    effectiveDeviceName(ctx.config),
                                     &connectErr)) {
         ctx.uiRuntime->showToast("BLE Connect",
                           connectErr.isEmpty() ? String("BLE connect failed")
@@ -425,15 +432,6 @@ void runBleMenu(AppContext &ctx,
     }
 
     if (choice == 6) {
-      String name = ctx.config.bleDeviceName;
-      if (ctx.uiRuntime->textInput("BLE Name", name, false, backgroundTick)) {
-        ctx.config.bleDeviceName = name;
-        markDirty(ctx);
-      }
-      continue;
-    }
-
-    if (choice == 7) {
       ctx.config.bleAutoConnect = !ctx.config.bleAutoConnect;
       markDirty(ctx);
       ctx.uiRuntime->showToast("BLE",
@@ -444,9 +442,8 @@ void runBleMenu(AppContext &ctx,
       continue;
     }
 
-    if (choice == 8) {
+    if (choice == 7) {
       ctx.config.bleDeviceAddress = "";
-      ctx.config.bleDeviceName = "";
       ctx.config.bleAutoConnect = false;
       ctx.ble->disconnectNow();
       markDirty(ctx);
@@ -471,6 +468,7 @@ void runSystemMenu(AppContext &ctx,
     if (tzLabel.length() > 16) {
       tzLabel = tzLabel.substring(0, 13) + "...";
     }
+    menu.push_back(deviceNameLabel(ctx.config));
     menu.push_back(String("UI Language: ") + uiLanguageLabel(currentLang));
     menu.push_back(displayBrightnessLabel(ctx.config.displayBrightnessPercent));
     menu.push_back(String("Timezone: ") + tzLabel);
@@ -484,11 +482,45 @@ void runSystemMenu(AppContext &ctx,
                                         backgroundTick,
                                         "OK Select  BACK Exit",
                                         "Runtime config control");
-    if (choice < 0 || choice == 5) {
+    if (choice < 0 || choice == 6) {
       return;
     }
 
     if (choice == 0) {
+      String nextName = effectiveDeviceName(ctx.config);
+      if (!ctx.uiRuntime->textInput("Device Name", nextName, false, backgroundTick)) {
+        continue;
+      }
+
+      nextName.trim();
+      if (nextName.isEmpty()) {
+        ctx.uiRuntime->showToast("System", "Device name cannot be empty", 1400, backgroundTick);
+        continue;
+      }
+      if (nextName.length() > kRuntimeDeviceNameMaxLen) {
+        ctx.uiRuntime->showToast("System", "Device name max 31 chars", 1500, backgroundTick);
+        continue;
+      }
+
+      ctx.config.deviceName = nextName;
+      markDirty(ctx);
+      if (saveSettingsConfig(ctx, backgroundTick, "System")) {
+        ctx.gateway->configure(ctx.config);
+        ctx.ble->configure(ctx.config);
+
+        const GatewayStatus gs = ctx.gateway->status();
+        if ((gs.wsConnected || gs.gatewayReady || gs.shouldConnect) &&
+            !ctx.config.gatewayUrl.isEmpty() &&
+            hasGatewayCredentials(ctx.config)) {
+          ctx.gateway->reconnectNow();
+        }
+
+        ctx.uiRuntime->showToast("System", "Device name updated", 1300, backgroundTick);
+      }
+      continue;
+    }
+
+    if (choice == 1) {
       std::vector<String> langItems;
       langItems.push_back("English");
       langItems.push_back("Korean");
@@ -510,7 +542,7 @@ void runSystemMenu(AppContext &ctx,
       continue;
     }
 
-    if (choice == 1) {
+    if (choice == 2) {
       const uint8_t originalBrightness = ctx.config.displayBrightnessPercent;
       int brightnessPercent = static_cast<int>(originalBrightness);
       if (!ctx.uiRuntime->numberWheelInput("Brightness",
@@ -535,7 +567,7 @@ void runSystemMenu(AppContext &ctx,
       continue;
     }
 
-    if (choice == 2) {
+    if (choice == 3) {
       String tzInput = ctx.config.timezoneTz;
       tzInput.trim();
       if (tzInput.isEmpty()) {
@@ -559,7 +591,7 @@ void runSystemMenu(AppContext &ctx,
       continue;
     }
 
-    if (choice == 3) {
+    if (choice == 4) {
       if (!ctx.wifi->isConnected()) {
         ctx.uiRuntime->showToast("System", "Wi-Fi required for IP timezone", 1600, backgroundTick);
         continue;
@@ -591,7 +623,7 @@ void runSystemMenu(AppContext &ctx,
       continue;
     }
 
-    if (choice != 4) {
+    if (choice != 5) {
       continue;
     }
 

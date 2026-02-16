@@ -21,6 +21,7 @@ class InputAdapter {
   void begin(lv_display_t *display);
   void tick();
   void resetState();
+  void setOkBackBlocked(bool blocked);
 
   InputEvent pollEvent();
 
@@ -46,6 +47,7 @@ class InputAdapter {
 
   bool okPrev_ = false;
   bool backPrev_ = false;
+  bool okBackBlocked_ = false;
   unsigned long okPressedAt_ = 0;
   unsigned long backPressedAt_ = 0;
   bool okLongFired_ = false;
@@ -57,4 +59,13 @@ class InputAdapter {
   uint8_t keyHead_ = 0;
   uint8_t keyTail_ = 0;
   uint8_t keyCount_ = 0;
+  unsigned long lastPinRefreshAt_ = 0;
+  unsigned long lastTraceAt_ = 0;
+  int lastTraceA_ = -1;
+  int lastTraceB_ = -1;
+  int lastTraceOk_ = -1;
+  int lastTraceBack_ = -1;
+  int32_t lastTracePos_ = 0;
+  int16_t lastTraceEncDiff_ = 0;
+  uint8_t lastTraceQ_ = 0;
 };

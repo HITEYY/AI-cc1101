@@ -5,7 +5,7 @@ LilyGo T-Embed CC1101 보드를 OpenClaw Remote Gateway에 `node`로 연결하�
 이 버전은 **LVGL 기반 런타임 UI 구조**를 사용합니다.
 
 - `OpenClaw` 앱: 상태 확인 + Gateway 설정 + Messenger(채팅/파일/음성) + Save & Apply + Connect/Disconnect/Reconnect
-- `Setting` 앱: Wi-Fi 설정 + BLE 스캔/연결/저장(재접속 대상) + System(Factory Reset) + Firmware Update(독립 업데이트 메뉴)
+- `Setting` 앱: Wi-Fi 설정 + BLE 스캔/연결/저장(재접속 대상) + System(Device Name/UI/Timezone/Factory Reset) + Firmware Update(독립 업데이트 메뉴)
 - `File Explorer` 앱: SD 카드 마운트/용량 확인/디렉토리 탐색/텍스트 미리보기/Quick Format
 - `APPMarket` 앱: GitHub 최신 릴리스 조회/다운로드 + SD 패키지 관리 + 펌웨어 설치/재설치/백업
 - `RF` 앱: CC1101 고급 설정(변조/채널/속도/편이/대역폭/패킷) + 패킷 TX/RX + RSSI + OOK TX
@@ -44,7 +44,10 @@ LilyGo T-Embed CC1101 보드를 OpenClaw Remote Gateway에 `node`로 연결하�
   - 전체 QWERTY 키보드 동시 표시 + `DONE/CAPS/DEL/SPACE/CANCEL`
   - ROT로 키 이동, OK로 입력, BACK으로 취소
 - BLE 장치 스캔/연결
-  - 저장 필드: `bleDeviceName`, `bleDeviceAddress`, `bleAutoConnect`
+  - 저장 필드: `bleDeviceAddress`, `bleAutoConnect`
+- 공통 장치명(Device Name) 설정
+  - 저장 필드: `deviceName`
+  - 적용 범위: OpenClaw `client.displayName`, BLE stack 이름
 - BLE HID 키보드 입력 수신
   - `Setting -> BLE -> Keyboard Input View`에서 입력 확인
   - `Setting -> BLE -> Clear Keyboard Input`으로 버퍼 초기화
@@ -216,9 +219,10 @@ git push origin v1.0.0
 5. `Setting -> BLE`
 - `Scan & Connect`, `Connect Saved`, `Disconnect`
 - `Keyboard Input View`, `Clear Keyboard Input`
-- `Edit Device Addr/Name`, `Auto Connect`, `Forget Saved`
+- `Edit Device Addr`, `Auto Connect`, `Forget Saved`
 
 6. `Setting -> System`
+- `Device Name`: 공통 장치명 변경 (OpenClaw/BLE 공통 반영)
 - `UI Language`: `English/Korean` 전환
 - `Factory Reset`: 2단계 확인 후 SD 설정 파일 + NVS 백업 설정 삭제
 

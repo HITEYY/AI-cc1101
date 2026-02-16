@@ -6,6 +6,7 @@
 #include <HTTPClient.h>
 #include <ArduinoJson.h>
 #include <lvgl.h>
+#include <esp_heap_caps.h>
 
 #include <time.h>
 #include <string.h>
@@ -50,6 +51,9 @@ constexpr unsigned long kNtpRetryMs = 30000UL;
 constexpr unsigned long kUnixSyncRetryMs = 30000UL;
 constexpr unsigned long kUnixSyncRefreshMs = 15UL * 60UL * 1000UL;
 constexpr unsigned long kUiLoopDelayMs = 2UL;
+constexpr unsigned long kBackgroundTickMinIntervalMs = 20UL;
+constexpr uint32_t kTlsMinInternalFreeBytesUi = 36000U;
+constexpr uint32_t kTlsMinInternalLargestBytesUi = 18000U;
 constexpr time_t kMinValidUnixTimeSec = 946684800;  // 2000-01-01T00:00:00Z
 constexpr uint64_t kWindowsEpochOffset100Ns = 116444736000000000ULL;
 constexpr uint64_t kHundredNsPerSecond = 10000000ULL;
@@ -119,6 +123,14 @@ bool isAllDigits(const String &value) {
     }
   }
   return true;
+}
+
+bool hasTlsHeapHeadroomUi() {
+  const uint32_t freeBytes = heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+  const uint32_t largest =
+      heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+  return freeBytes >= kTlsMinInternalFreeBytesUi &&
+         largest >= kTlsMinInternalLargestBytesUi;
 }
 
 bool parseUtcOffsetMinutes(const String &input, int *outMinutes) {
@@ -378,6 +390,7 @@ class UiRuntime::Impl {
   int textInputCacheCapsIndex = -1;
   unsigned long textInputLastFullRenderMs = 0;
   bool serviceActive = false;
+  unsigned long lastBackgroundTickMs = 0;
 
   bool begin() {
     if (!port.begin()) {
@@ -425,12 +438,26 @@ class UiRuntime::Impl {
     }
 
     serviceActive = true;
-    if (backgroundTick && *backgroundTick) {
-      (*backgroundTick)();
-    }
-
+    const unsigned long startMs = millis();
     input.tick();
     port.pump();
+    const unsigned long now = millis();
+    if (backgroundTick && *backgroundTick &&
+        (lastBackgroundTickMs == 0 ||
+         now - lastBackgroundTickMs >= kBackgroundTickMinIntervalMs)) {
+      lastBackgroundTickMs = now;
+      (*backgroundTick)();
+    }
+    // Poll once more after background work so short pulses are less likely
+    // to be missed when Wi-Fi/gateway ticks temporarily block.
+    input.tick();
+    port.pump();
+#if USER_INPUT_TRACE_ENABLED
+    const unsigned long elapsedMs = millis() - startMs;
+    if (elapsedMs >= 40UL) {
+      Serial.printf("[ui] service stall: %lu ms\n", elapsedMs);
+    }
+#endif
     serviceActive = false;
   }
 
@@ -635,9 +662,14 @@ class UiRuntime::Impl {
       }
       return false;
     }
+    if (!hasTlsHeapHeadroomUi()) {
+      if (error) {
+        *error = "Low heap (skip timezone sync)";
+      }
+      return false;
+    }
 
-    WiFiClientSecure client;
-    client.setInsecure();
+    WiFiClient client;
 
     HTTPClient http;
     http.setConnectTimeout(3500);
@@ -719,6 +751,12 @@ class UiRuntime::Impl {
       }
       return false;
     }
+    if (!hasTlsHeapHeadroomUi()) {
+      if (error) {
+        *error = "Low heap (skip time sync)";
+      }
+      return false;
+    }
 
     WiFiClientSecure client;
     client.setInsecure();
@@ -728,7 +766,13 @@ class UiRuntime::Impl {
     http.setTimeout(2200);
     http.setFollowRedirects(HTTPC_FORCE_FOLLOW_REDIRECTS);
 
-    if (!http.begin(client, USER_UNIX_TIME_SERVER_URL)) {
+    String url = USER_UNIX_TIME_SERVER_URL;
+    if (url.startsWith("https://")) {
+      url.remove(0, 8);
+      url = "http://" + url;
+    }
+
+    if (!http.begin(client, url)) {
       if (error) {
         *error = "Time server begin failed";
       }
@@ -2136,6 +2180,10 @@ void UiRuntime::resetInputState() {
   impl_->input.resetState();
 }
 
+void UiRuntime::setOkBackBlocked(bool blocked) {
+  impl_->input.setOkBackBlocked(blocked);
+}
+
 void UiRuntime::setStatusLine(const String &line) {
   impl_->statusLine = line;
 }
@@ -2181,14 +2229,11 @@ int UiRuntime::launcherLoop(const String &title,
 
   int selected = wrapIndex(selectedIndex, static_cast<int>(items.size()));
   bool redraw = true;
-  unsigned long lastRefreshMs = millis();
 
   while (true) {
-    const unsigned long now = millis();
-    if (redraw || now - lastRefreshMs >= kHeaderRefreshMs) {
+    if (redraw) {
       impl_->renderLauncher(title, items, selected);
       redraw = false;
-      lastRefreshMs = now;
     }
 
     impl_->service(&backgroundTick);

@@ -39,6 +39,7 @@ constexpr unsigned long kSleepReleasePollMs = 5UL;
 constexpr unsigned long kRamWatchPollMs = 1000UL;
 constexpr uint8_t kRamWatchRebootPercent = 100U;
 constexpr uint8_t kBacklightFullDuty = 254U;
+constexpr unsigned long kMemTraceLogMs = 5000UL;
 
 uint8_t heapUsedPercent(uint32_t caps) {
   const uint32_t total = heap_caps_get_total_size(caps);
@@ -54,6 +55,7 @@ uint8_t heapUsedPercent(uint32_t caps) {
 
 void tickRamWatchdog() {
   static unsigned long lastPollMs = 0;
+  static unsigned long lastTraceLogMs = 0;
 
   const unsigned long now = millis();
   if (lastPollMs != 0 && now - lastPollMs < kRamWatchPollMs) {
@@ -63,6 +65,26 @@ void tickRamWatchdog() {
 
   const uint8_t internalPct = heapUsedPercent(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
   const uint8_t psramPct = heapUsedPercent(MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+
+#if USER_MEM_TRACE_ENABLED
+  if (lastTraceLogMs == 0 || now - lastTraceLogMs >= kMemTraceLogMs) {
+    lastTraceLogMs = now;
+    const uint32_t internalFree = heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    const uint32_t internalLargest =
+        heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    const uint32_t psramFree = heap_caps_get_free_size(MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    const uint32_t psramLargest =
+        heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    Serial.printf(
+        "[mem] int=%u%% free=%u largest=%u | psram=%u%% free=%u largest=%u\n",
+        static_cast<unsigned int>(internalPct),
+        static_cast<unsigned int>(internalFree),
+        static_cast<unsigned int>(internalLargest),
+        static_cast<unsigned int>(psramPct),
+        static_cast<unsigned int>(psramFree),
+        static_cast<unsigned int>(psramLargest));
+  }
+#endif
 
   if (internalPct < kRamWatchRebootPercent && psramPct < kRamWatchRebootPercent) {
     return;
@@ -251,8 +273,8 @@ void setup() {
   gGateway.configure(gAppContext.config);
   configureGatewayCallbacks();
 
-  gBle.begin();
   gBle.configure(gAppContext.config);
+  gBle.begin();
 
   gNodeHandler.setGatewayClient(&gGateway);
 
@@ -272,7 +294,7 @@ void setup() {
   if (gAppContext.config.bleAutoConnect &&
       !gAppContext.config.bleDeviceAddress.isEmpty()) {
     gBle.connectToDevice(gAppContext.config.bleDeviceAddress,
-                         gAppContext.config.bleDeviceName,
+                         effectiveDeviceName(gAppContext.config),
                          nullptr);
   }
 

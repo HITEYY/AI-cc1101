@@ -1,6 +1,7 @@
 #include "input_adapter.h"
 
 #include "../core/board_pins.h"
+#include "user_config.h"
 
 namespace {
 
@@ -11,6 +12,8 @@ constexpr uint8_t kPinBack = boardpins::kEncoderBack;
 
 constexpr unsigned long kDebounceMs = 20UL;
 constexpr unsigned long kLongPressMs = 750UL;
+constexpr unsigned long kPinRefreshMs = 1000UL;
+constexpr unsigned long kTraceHeartbeatMs = 1500UL;
 
 uint8_t saturatingInc(uint8_t value) {
   if (value == 0xFFU) {
@@ -27,9 +30,21 @@ InputAdapter::InputAdapter()
                RotaryEncoder::LatchMode::TWO03) {}
 
 void InputAdapter::begin(lv_display_t *display) {
+  pinMode(kPinEncoderA, INPUT_PULLUP);
+  pinMode(kPinEncoderB, INPUT_PULLUP);
   pinMode(kPinOk, INPUT_PULLUP);
   pinMode(kPinBack, INPUT_PULLUP);
+  lastPinRefreshAt_ = millis();
+  lastTraceAt_ = 0;
+  lastTraceA_ = -1;
+  lastTraceB_ = -1;
+  lastTraceOk_ = -1;
+  lastTraceBack_ = -1;
+  lastTracePos_ = 0;
+  lastTraceEncDiff_ = 0;
+  lastTraceQ_ = 0;
 
+  encoder_.tick();
   encoder_.setPosition(0);
   lastEncoderPos_ = 0;
   pendingEncDiff_ = 0;
@@ -82,6 +97,15 @@ bool InputAdapter::dequeueKey(uint32_t &key, lv_indev_state_t &state) {
 }
 
 void InputAdapter::tick() {
+  const unsigned long now = millis();
+  if (now - lastPinRefreshAt_ >= kPinRefreshMs) {
+    pinMode(kPinEncoderA, INPUT_PULLUP);
+    pinMode(kPinEncoderB, INPUT_PULLUP);
+    pinMode(kPinOk, INPUT_PULLUP);
+    pinMode(kPinBack, INPUT_PULLUP);
+    lastPinRefreshAt_ = now;
+  }
+
   encoder_.tick();
   const int32_t pos = encoder_.getPosition();
   const int32_t rawDelta = pos - lastEncoderPos_;
@@ -92,46 +116,85 @@ void InputAdapter::tick() {
     lastEncoderPos_ = pos;
   }
 
-  const unsigned long now = millis();
-
-  const bool okPressed = digitalRead(kPinOk) == LOW;
-  if (okPressed && !okPrev_) {
-    okPressedAt_ = now;
-    okLongFired_ = false;
-  }
-  if (!okPressed && okPrev_) {
-    if (!okLongFired_ && now - okPressedAt_ >= kDebounceMs) {
-      pendingEvent_.ok = true;
-      pendingEvent_.okCount = saturatingInc(pendingEvent_.okCount);
-      enqueueKeyPressRelease(LV_KEY_ENTER);
+  if (!okBackBlocked_) {
+    const bool okPressed = digitalRead(kPinOk) == LOW;
+    if (okPressed && !okPrev_) {
+      okPressedAt_ = now;
+      okLongFired_ = false;
     }
-    okPressedAt_ = 0;
-    okLongFired_ = false;
-  }
-  if (okPressed && !okLongFired_ && okPressedAt_ > 0 &&
-      now - okPressedAt_ >= kLongPressMs) {
-    pendingEvent_.back = true;
-    pendingEvent_.okLong = true;
-    pendingEvent_.backCount = saturatingInc(pendingEvent_.backCount);
-    pendingEvent_.okLongCount = saturatingInc(pendingEvent_.okLongCount);
-    enqueueKeyPressRelease(LV_KEY_ESC);
-    okLongFired_ = true;
-  }
-  okPrev_ = okPressed;
-
-  const bool backPressed = digitalRead(kPinBack) == LOW;
-  if (backPressed && !backPrev_) {
-    backPressedAt_ = now;
-  }
-  if (!backPressed && backPrev_) {
-    if (now - backPressedAt_ >= kDebounceMs) {
+    if (!okPressed && okPrev_) {
+      if (!okLongFired_ && now - okPressedAt_ >= kDebounceMs) {
+        pendingEvent_.ok = true;
+        pendingEvent_.okCount = saturatingInc(pendingEvent_.okCount);
+        enqueueKeyPressRelease(LV_KEY_ENTER);
+      }
+      okPressedAt_ = 0;
+      okLongFired_ = false;
+    }
+    if (okPressed && !okLongFired_ && okPressedAt_ > 0 &&
+        now - okPressedAt_ >= kLongPressMs) {
       pendingEvent_.back = true;
+      pendingEvent_.okLong = true;
       pendingEvent_.backCount = saturatingInc(pendingEvent_.backCount);
+      pendingEvent_.okLongCount = saturatingInc(pendingEvent_.okLongCount);
       enqueueKeyPressRelease(LV_KEY_ESC);
+      okLongFired_ = true;
     }
+    okPrev_ = okPressed;
+
+    const bool backPressed = digitalRead(kPinBack) == LOW;
+    if (backPressed && !backPrev_) {
+      backPressedAt_ = now;
+    }
+    if (!backPressed && backPrev_) {
+      if (now - backPressedAt_ >= kDebounceMs) {
+        pendingEvent_.back = true;
+        pendingEvent_.backCount = saturatingInc(pendingEvent_.backCount);
+        enqueueKeyPressRelease(LV_KEY_ESC);
+      }
+      backPressedAt_ = 0;
+    }
+    backPrev_ = backPressed;
+  } else {
+    okPrev_ = digitalRead(kPinOk) == LOW;
+    backPrev_ = digitalRead(kPinBack) == LOW;
+    okPressedAt_ = 0;
     backPressedAt_ = 0;
+    okLongFired_ = false;
   }
-  backPrev_ = backPressed;
+
+#if USER_INPUT_TRACE_ENABLED
+  const int a = digitalRead(kPinEncoderA);
+  const int b = digitalRead(kPinEncoderB);
+  const int ok = digitalRead(kPinOk);
+  const int back = digitalRead(kPinBack);
+  const bool changed = (a != lastTraceA_) ||
+                       (b != lastTraceB_) ||
+                       (ok != lastTraceOk_) ||
+                       (back != lastTraceBack_) ||
+                       (pos != lastTracePos_) ||
+                       (pendingEncDiff_ != lastTraceEncDiff_) ||
+                       (keyCount_ != lastTraceQ_);
+  if (changed || lastTraceAt_ == 0 || now - lastTraceAt_ >= kTraceHeartbeatMs) {
+    lastTraceAt_ = now;
+    Serial.printf("[input] A=%d B=%d OK=%d BACK=%d pos=%ld rawDelta=%ld encDiff=%d q=%u\n",
+                  a,
+                  b,
+                  ok,
+                  back,
+                  static_cast<long>(pos),
+                  static_cast<long>(rawDelta),
+                  static_cast<int>(pendingEncDiff_),
+                  static_cast<unsigned int>(keyCount_));
+    lastTraceA_ = a;
+    lastTraceB_ = b;
+    lastTraceOk_ = ok;
+    lastTraceBack_ = back;
+    lastTracePos_ = pos;
+    lastTraceEncDiff_ = pendingEncDiff_;
+    lastTraceQ_ = keyCount_;
+  }
+#endif
 }
 
 void InputAdapter::resetState() {
@@ -150,6 +213,26 @@ void InputAdapter::resetState() {
 
   const int32_t pos = encoder_.getPosition();
   lastEncoderPos_ = pos;
+}
+
+void InputAdapter::setOkBackBlocked(bool blocked) {
+  okBackBlocked_ = blocked;
+  if (!blocked) {
+    return;
+  }
+
+  pendingEvent_.ok = false;
+  pendingEvent_.back = false;
+  pendingEvent_.okLong = false;
+  pendingEvent_.okCount = 0;
+  pendingEvent_.backCount = 0;
+  pendingEvent_.okLongCount = 0;
+  keyHead_ = 0;
+  keyTail_ = 0;
+  keyCount_ = 0;
+  okPressedAt_ = 0;
+  backPressedAt_ = 0;
+  okLongFired_ = false;
 }
 
 InputEvent InputAdapter::pollEvent() {

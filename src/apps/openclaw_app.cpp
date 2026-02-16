@@ -3,11 +3,15 @@
 #include <SD.h>
 #include <SPI.h>
 #include <WiFi.h>
-#include <mbedtls/base64.h>
+#include <limits.h>
 #include <time.h>
 
 #include <algorithm>
 #include <vector>
+
+extern "C" {
+#include <libb64/cencode.h>
+}
 
 #include "../core/cc1101_radio.h"
 #include "../core/audio_recorder.h"
@@ -26,9 +30,13 @@ constexpr const char *kMessageSenderId = "node-host";
 constexpr const char *kDefaultAgentFallback = "default";
 constexpr const char *kDefaultSessionAgentId = "main";
 constexpr const char *kDefaultSessionKey = "agent:main:main";
-constexpr size_t kMessageChunkBytes = 960;
+constexpr size_t kMessageChunkBytes = 256;
+constexpr size_t kBase64ChunkBufferBytes =
+    ((kMessageChunkBytes + 2U) / 3U) * 4U + 1U;
 constexpr uint32_t kMaxVoiceBytes = 2097152;
 constexpr uint32_t kMaxFileBytes = 4194304;
+constexpr uint8_t kChunkSendMaxRetries = 3;
+constexpr unsigned long kChunkRetryWaitMs = 2500UL;
 constexpr size_t kOutboxCapacity = 40;
 constexpr size_t kOutboxMaxIdLen = 96;
 constexpr size_t kOutboxMaxMetaLen = 64;
@@ -45,6 +53,31 @@ unsigned long gSubscribedConnectOkMs = 0;
 struct ChatEntry {
   GatewayInboxMessage message;
   bool outgoing = false;
+};
+
+struct SdSelectEntry {
+  String fullPath;
+  String label;
+  bool isDirectory = false;
+  uint64_t size = 0;
+};
+
+class ScopedOkBackBlock {
+ public:
+  explicit ScopedOkBackBlock(UiRuntime *ui) : ui_(ui) {
+    if (ui_) {
+      ui_->setOkBackBlocked(true);
+    }
+  }
+
+  ~ScopedOkBackBlock() {
+    if (ui_) {
+      ui_->setOkBackBlocked(false);
+    }
+  }
+
+ private:
+  UiRuntime *ui_ = nullptr;
 };
 
 bool sendTextPayload(AppContext &ctx,
@@ -66,6 +99,60 @@ String defaultAgentId() {
     id = kDefaultAgentFallback;
   }
   return id;
+}
+
+String withGatewayErrorSuffix(const String &base, GatewayClient *gateway) {
+  if (!gateway) {
+    return base;
+  }
+  String err = gateway->lastError();
+  err.trim();
+  if (err.isEmpty()) {
+    return base;
+  }
+  String merged = base;
+  merged += ": ";
+  merged += err;
+  if (merged.length() > 84) {
+    merged = merged.substring(0, 81) + "...";
+  }
+  return merged;
+}
+
+bool sendGatewayEventWithRetry(AppContext &ctx,
+                               const char *eventName,
+                               JsonDocument &payload,
+                               const std::function<void()> &backgroundTick,
+                               uint8_t maxRetries = kChunkSendMaxRetries) {
+  if (maxRetries == 0) {
+    maxRetries = 1;
+  }
+
+  for (uint8_t attempt = 0; attempt < maxRetries; ++attempt) {
+    if (ctx.gateway->sendNodeEvent(eventName, payload)) {
+      return true;
+    }
+
+    if (attempt + 1 >= maxRetries) {
+      break;
+    }
+
+    ctx.gateway->connectNow();
+
+    const unsigned long startMs = millis();
+    while (millis() - startMs < kChunkRetryWaitMs) {
+      if (backgroundTick) {
+        backgroundTick();
+      }
+      const GatewayStatus now = ctx.gateway->status();
+      if (now.gatewayReady && now.wsConnected) {
+        break;
+      }
+      delay(25);
+    }
+  }
+
+  return false;
 }
 
 String buildMainMessengerSessionKey() {
@@ -206,6 +293,49 @@ String baseName(const String &path) {
   return path.substring(static_cast<unsigned int>(slash + 1));
 }
 
+String parentPath(const String &path) {
+  if (path.isEmpty() || path == "/") {
+    return "/";
+  }
+  const int slash = path.lastIndexOf('/');
+  if (slash <= 0) {
+    return "/";
+  }
+  return path.substring(0, static_cast<unsigned int>(slash));
+}
+
+String buildChildPath(const String &dirPath, const String &name) {
+  if (name.startsWith("/")) {
+    return name;
+  }
+  if (dirPath == "/") {
+    return "/" + name;
+  }
+  return dirPath + "/" + name;
+}
+
+String formatBytes(uint64_t bytes) {
+  static const char *kUnits[] = {"B", "KB", "MB", "GB"};
+  double value = static_cast<double>(bytes);
+  size_t unit = 0;
+  while (value >= 1024.0 && unit < 3) {
+    value /= 1024.0;
+    ++unit;
+  }
+
+  char buf[32];
+  if (unit == 0) {
+    snprintf(buf,
+             sizeof(buf),
+             "%llu %s",
+             static_cast<unsigned long long>(bytes),
+             kUnits[unit]);
+  } else {
+    snprintf(buf, sizeof(buf), "%.1f %s", value, kUnits[unit]);
+  }
+  return String(buf);
+}
+
 String detectAudioMime(const String &path) {
   String lower = path;
   lower.toLowerCase();
@@ -313,25 +443,40 @@ String makeMessageId(const char *prefix) {
   return id;
 }
 
-String encodeBase64(const uint8_t *data, size_t len) {
-  if (!data || len == 0) {
-    return "";
+bool encodeBase64(const uint8_t *data,
+                  size_t len,
+                  char *out,
+                  size_t outCap,
+                  size_t *outLen = nullptr) {
+  if (!data || len == 0 || !out || outCap < 2U) {
+    return false;
   }
 
-  const size_t outCap = ((len + 2) / 3) * 4 + 4;
-  std::vector<unsigned char> encoded(outCap, 0);
-  size_t outLen = 0;
-  const int rc = mbedtls_base64_encode(encoded.data(),
-                                       encoded.size(),
-                                       &outLen,
-                                       data,
-                                       len);
-  if (rc != 0 || outLen == 0 || outLen >= encoded.size()) {
-    return "";
+  const size_t expected = base64_encode_expected_len(len);
+  if (expected == 0 || expected + 1U > outCap || len > static_cast<size_t>(INT_MAX)) {
+    out[0] = '\0';
+    return false;
   }
 
-  encoded[outLen] = '\0';
-  return String(reinterpret_cast<const char *>(encoded.data()));
+  const int written = base64_encode_chars(reinterpret_cast<const char *>(data),
+                                          static_cast<int>(len),
+                                          out);
+  if (written <= 0) {
+    out[0] = '\0';
+    return false;
+  }
+
+  const size_t produced = static_cast<size_t>(written);
+  if (produced != expected || produced >= outCap) {
+    out[0] = '\0';
+    return false;
+  }
+
+  out[produced] = '\0';
+  if (outLen) {
+    *outLen = produced;
+  }
+  return true;
 }
 
 bool ensureSdMountedForVoice(String *error = nullptr) {
@@ -353,6 +498,142 @@ bool ensureSdMountedForVoice(String *error = nullptr) {
     *error = "SD mount failed";
   }
   return mounted;
+}
+
+bool listSdDirectory(const String &path,
+                     std::vector<SdSelectEntry> &outEntries,
+                     String *error = nullptr) {
+  outEntries.clear();
+
+  File dir = SD.open(path.c_str(), FILE_READ);
+  if (!dir || !dir.isDirectory()) {
+    if (error) {
+      *error = "Directory open failed";
+    }
+    if (dir) {
+      dir.close();
+    }
+    return false;
+  }
+
+  File entry = dir.openNextFile();
+  while (entry) {
+    const String rawName = String(entry.name());
+    if (!rawName.isEmpty()) {
+      SdSelectEntry item;
+      item.fullPath = buildChildPath(path, rawName);
+      item.isDirectory = entry.isDirectory();
+      item.size = entry.size();
+      item.label = item.isDirectory ? "[D] " : "[F] ";
+      item.label += baseName(item.fullPath);
+      if (!item.isDirectory) {
+        item.label += " (" + formatBytes(item.size) + ")";
+      }
+      outEntries.push_back(item);
+    }
+    entry.close();
+    entry = dir.openNextFile();
+  }
+  dir.close();
+
+  std::sort(outEntries.begin(),
+            outEntries.end(),
+            [](const SdSelectEntry &a, const SdSelectEntry &b) {
+              if (a.isDirectory != b.isDirectory) {
+                return a.isDirectory;
+              }
+              String lhs = a.fullPath;
+              String rhs = b.fullPath;
+              lhs.toLowerCase();
+              rhs.toLowerCase();
+              return lhs < rhs;
+            });
+  return true;
+}
+
+bool selectSdFile(AppContext &ctx,
+                  const String &title,
+                  const std::function<bool(const String &)> &acceptFile,
+                  String *selectedPath,
+                  const std::function<void()> &backgroundTick) {
+  if (!selectedPath) {
+    return false;
+  }
+
+  String currentPath = "/";
+  int selected = 0;
+
+  while (true) {
+    std::vector<SdSelectEntry> entries;
+    String err;
+    if (!listSdDirectory(currentPath, entries, &err)) {
+      ctx.uiRuntime->showToast("File",
+                               err.isEmpty() ? String("Read failed") : err,
+                               1700,
+                               backgroundTick);
+      return false;
+    }
+
+    std::vector<String> menu;
+    if (currentPath != "/") {
+      menu.push_back(".. (Up)");
+    }
+    for (std::vector<SdSelectEntry>::const_iterator it = entries.begin();
+         it != entries.end();
+         ++it) {
+      menu.push_back(it->label);
+    }
+    menu.push_back("Refresh");
+    menu.push_back("Cancel");
+
+    const String subtitle = "Path: " + trimMiddle(currentPath, 23);
+    const int choice = ctx.uiRuntime->menuLoop(title,
+                                               menu,
+                                               selected,
+                                               backgroundTick,
+                                               "OK Select  BACK Cancel",
+                                               subtitle);
+    if (choice < 0) {
+      return false;
+    }
+
+    selected = choice;
+    int idx = choice;
+    if (currentPath != "/") {
+      if (idx == 0) {
+        currentPath = parentPath(currentPath);
+        selected = 0;
+        continue;
+      }
+      idx -= 1;
+    }
+
+    const int entryCount = static_cast<int>(entries.size());
+    if (idx == entryCount) {
+      continue;
+    }
+    if (idx == entryCount + 1) {
+      return false;
+    }
+    if (idx < 0 || idx >= entryCount) {
+      continue;
+    }
+
+    const SdSelectEntry selectedEntry = entries[static_cast<size_t>(idx)];
+    if (selectedEntry.isDirectory) {
+      currentPath = selectedEntry.fullPath;
+      selected = 0;
+      continue;
+    }
+
+    if (acceptFile && !acceptFile(selectedEntry.fullPath)) {
+      ctx.uiRuntime->showToast("File", "This file type is not allowed", 1500, backgroundTick);
+      continue;
+    }
+
+    *selectedPath = selectedEntry.fullPath;
+    return true;
+  }
 }
 
 bool askVoiceRecordSeconds(AppContext &ctx,
@@ -555,55 +836,71 @@ bool sendVoiceFileMessage(AppContext &ctx,
     meta["ts"] = metaTs;
   }
 
-  if (!ctx.gateway->sendNodeEvent("msg.voice.meta", meta)) {
+  if (!sendGatewayEventWithRetry(ctx, "msg.voice.meta", meta, backgroundTick)) {
     file.close();
-    ctx.uiRuntime->showToast("Voice", "Voice meta send failed", 1700, backgroundTick);
+    ctx.uiRuntime->showToast("Voice",
+                      withGatewayErrorSuffix("Voice meta send failed", ctx.gateway),
+                      1800,
+                      backgroundTick);
     return false;
   }
 
-  uint8_t raw[kMessageChunkBytes] = {0};
+  std::vector<uint8_t> raw(kMessageChunkBytes, 0);
+  std::vector<char> encoded(kBase64ChunkBufferBytes, 0);
+  if (raw.empty() || encoded.empty()) {
+    file.close();
+    ctx.uiRuntime->showToast("Voice", "Out of memory", 1700, backgroundTick);
+    return false;
+  }
+
+  DynamicJsonDocument chunk(2048);
   uint16_t chunkIndex = 0;
   while (file.available() && chunkIndex < totalChunks) {
-    const size_t readLen = file.read(raw, sizeof(raw));
+    const size_t readLen = file.read(raw.data(), raw.size());
     if (readLen == 0) {
       break;
     }
 
-    const String encoded = encodeBase64(raw, readLen);
-    if (encoded.isEmpty()) {
+    if (!encodeBase64(raw.data(), readLen, encoded.data(), encoded.size())) {
       file.close();
       ctx.uiRuntime->showToast("Voice", "Base64 encode failed", 1700, backgroundTick);
       return false;
     }
 
-    DynamicJsonDocument chunk(2048);
+    chunk.clear();
     chunk["id"] = messageId;
     chunk["from"] = kMessageSenderId;
     chunk["to"] = target;
     chunk["seq"] = static_cast<uint32_t>(chunkIndex + 1);
     chunk["chunks"] = totalChunks;
     chunk["last"] = (chunkIndex + 1) >= totalChunks;
-    chunk["data"] = encoded;
+    chunk["data"] = encoded.data();
     const uint64_t chunkTs = currentUnixMs();
     if (chunkTs > 0) {
       chunk["ts"] = chunkTs;
     }
 
-    if (!ctx.gateway->sendNodeEvent("msg.voice.chunk", chunk)) {
+    if (!sendGatewayEventWithRetry(ctx, "msg.voice.chunk", chunk, backgroundTick)) {
       file.close();
-      ctx.uiRuntime->showToast("Voice", "Voice chunk send failed", 1700, backgroundTick);
+      ctx.uiRuntime->showToast("Voice",
+                        withGatewayErrorSuffix("Voice chunk send failed", ctx.gateway),
+                        1800,
+                        backgroundTick);
       return false;
     }
 
     ++chunkIndex;
-    if (backgroundTick) {
+    if (backgroundTick && ((chunkIndex % 8U) == 0U)) {
       backgroundTick();
     }
   }
   file.close();
 
   if (chunkIndex != totalChunks) {
-    ctx.uiRuntime->showToast("Voice", "Voice send incomplete", 1700, backgroundTick);
+    ctx.uiRuntime->showToast("Voice",
+                      withGatewayErrorSuffix("Voice send incomplete", ctx.gateway),
+                      1800,
+                      backgroundTick);
     return false;
   }
 
@@ -643,12 +940,6 @@ void sendVoiceMessage(AppContext &ctx,
     filePath = "/" + filePath;
   }
 
-  String caption;
-  if (!ctx.uiRuntime->textInput("Caption(optional)", caption, false, backgroundTick)) {
-    return;
-  }
-  caption.trim();
-
   String mountErr;
   if (!ensureSdMountedForVoice(&mountErr)) {
     ctx.uiRuntime->showToast("Voice",
@@ -658,7 +949,7 @@ void sendVoiceMessage(AppContext &ctx,
     return;
   }
 
-  sendVoiceFileMessage(ctx, filePath, caption, backgroundTick);
+  sendVoiceFileMessage(ctx, filePath, String(), backgroundTick);
 }
 
 void recordVoiceFromMic(AppContext &ctx,
@@ -676,12 +967,6 @@ void recordVoiceFromMic(AppContext &ctx,
   if (!askVoiceRecordSeconds(ctx, backgroundTick, &recordSeconds)) {
     return;
   }
-
-  String caption;
-  if (!ctx.uiRuntime->textInput("Caption(optional)", caption, false, backgroundTick)) {
-    return;
-  }
-  caption.trim();
 
   String mountErr;
   if (!ensureSdMountedForVoice(&mountErr)) {
@@ -703,18 +988,22 @@ void recordVoiceFromMic(AppContext &ctx,
 
   String recordErr;
   uint32_t bytesWritten = 0;
-  if (!recordMicWavToSd(voicePath,
-                        recordSeconds,
-                        backgroundTick,
-                        std::function<bool()>(),
-                        &recordErr,
-                        &bytesWritten)) {
-    ctx.uiRuntime->showToast("Voice",
-                      recordErr.isEmpty() ? String("MIC recording failed")
-                                          : recordErr,
-                      1800,
-                      backgroundTick);
-    return;
+  {
+    ScopedOkBackBlock guard(ctx.uiRuntime);
+    const std::function<void()> noBackgroundTick;
+    if (!recordMicWavToSd(voicePath,
+                          recordSeconds,
+                          noBackgroundTick,
+                          std::function<bool()>(),
+                          &recordErr,
+                          &bytesWritten)) {
+      ctx.uiRuntime->showToast("Voice",
+                        recordErr.isEmpty() ? String("MIC recording failed")
+                                            : recordErr,
+                        1800,
+                        backgroundTick);
+      return;
+    }
   }
 
   if (bytesWritten > kMaxVoiceBytes) {
@@ -723,7 +1012,7 @@ void recordVoiceFromMic(AppContext &ctx,
     return;
   }
 
-  sendVoiceFileMessage(ctx, voicePath, caption, backgroundTick);
+  sendVoiceFileMessage(ctx, voicePath, String(), backgroundTick);
 }
 
 bool recordVoiceFromBle(AppContext &ctx,
@@ -754,12 +1043,6 @@ bool recordVoiceFromBle(AppContext &ctx,
     return true;
   }
 
-  String caption;
-  if (!ctx.uiRuntime->textInput("Caption(optional)", caption, false, backgroundTick)) {
-    return true;
-  }
-  caption.trim();
-
   String mountErr;
   if (!ensureSdMountedForVoice(&mountErr)) {
     ctx.uiRuntime->showToast("Voice",
@@ -780,18 +1063,21 @@ bool recordVoiceFromBle(AppContext &ctx,
 
   String recordErr;
   uint32_t bytesWritten = 0;
-  if (!ctx.ble->recordAudioStreamWavToSd(voicePath,
-                                         recordSeconds,
-                                         backgroundTick,
-                                         std::function<bool()>(),
-                                         &recordErr,
-                                         &bytesWritten)) {
-    ctx.uiRuntime->showToast("BLE",
-                      recordErr.isEmpty() ? String("BLE recording failed")
-                                          : recordErr,
-                      1800,
-                      backgroundTick);
-    return true;
+  {
+    ScopedOkBackBlock guard(ctx.uiRuntime);
+    if (!ctx.ble->recordAudioStreamWavToSd(voicePath,
+                                           recordSeconds,
+                                           backgroundTick,
+                                           std::function<bool()>(),
+                                           &recordErr,
+                                           &bytesWritten)) {
+      ctx.uiRuntime->showToast("BLE",
+                        recordErr.isEmpty() ? String("BLE recording failed")
+                                            : recordErr,
+                        1800,
+                        backgroundTick);
+      return true;
+    }
   }
 
   if (bytesWritten > kMaxVoiceBytes) {
@@ -800,7 +1086,7 @@ bool recordVoiceFromBle(AppContext &ctx,
     return true;
   }
 
-  sendVoiceFileMessage(ctx, voicePath, caption, backgroundTick);
+  sendVoiceFileMessage(ctx, voicePath, String(), backgroundTick);
   return true;
 }
 
@@ -819,26 +1105,6 @@ void sendFileMessage(AppContext &ctx,
     return;
   }
 
-  String filePath = "/upload.bin";
-  if (!ctx.uiRuntime->textInput("File Path", filePath, false, backgroundTick)) {
-    return;
-  }
-  filePath.trim();
-  if (filePath.isEmpty()) {
-    ctx.uiRuntime->showToast("File", "Path is empty", 1300, backgroundTick);
-    return;
-  }
-  if (!filePath.startsWith("/")) {
-    filePath = "/" + filePath;
-  }
-
-  const String target = defaultAgentId();
-  String caption;
-  if (!ctx.uiRuntime->textInput("Message(optional)", caption, false, backgroundTick)) {
-    return;
-  }
-  caption.trim();
-
   String mountErr;
   if (!ensureSdMountedForVoice(&mountErr)) {
     ctx.uiRuntime->showToast("File",
@@ -847,6 +1113,18 @@ void sendFileMessage(AppContext &ctx,
                       backgroundTick);
     return;
   }
+
+  String filePath;
+  if (!selectSdFile(ctx, "Select File", std::function<bool(const String &)>(), &filePath, backgroundTick)) {
+    return;
+  }
+
+  const String target = defaultAgentId();
+  String caption;
+  if (!ctx.uiRuntime->textInput("Message(optional)", caption, false, backgroundTick)) {
+    return;
+  }
+  caption.trim();
 
   File file = SD.open(filePath.c_str(), FILE_READ);
   if (!file || file.isDirectory()) {
@@ -892,55 +1170,71 @@ void sendFileMessage(AppContext &ctx,
     meta["ts"] = metaTs;
   }
 
-  if (!ctx.gateway->sendNodeEvent("msg.file.meta", meta)) {
+  if (!sendGatewayEventWithRetry(ctx, "msg.file.meta", meta, backgroundTick)) {
     file.close();
-    ctx.uiRuntime->showToast("File", "File meta send failed", 1700, backgroundTick);
+    ctx.uiRuntime->showToast("File",
+                      withGatewayErrorSuffix("File meta send failed", ctx.gateway),
+                      1800,
+                      backgroundTick);
     return;
   }
 
-  uint8_t raw[kMessageChunkBytes] = {0};
+  std::vector<uint8_t> raw(kMessageChunkBytes, 0);
+  std::vector<char> encoded(kBase64ChunkBufferBytes, 0);
+  if (raw.empty() || encoded.empty()) {
+    file.close();
+    ctx.uiRuntime->showToast("File", "Out of memory", 1700, backgroundTick);
+    return;
+  }
+
+  DynamicJsonDocument chunk(2048);
   uint16_t chunkIndex = 0;
   while (file.available() && chunkIndex < totalChunks) {
-    const size_t readLen = file.read(raw, sizeof(raw));
+    const size_t readLen = file.read(raw.data(), raw.size());
     if (readLen == 0) {
       break;
     }
 
-    const String encoded = encodeBase64(raw, readLen);
-    if (encoded.isEmpty()) {
+    if (!encodeBase64(raw.data(), readLen, encoded.data(), encoded.size())) {
       file.close();
       ctx.uiRuntime->showToast("File", "Base64 encode failed", 1700, backgroundTick);
       return;
     }
 
-    DynamicJsonDocument chunk(2048);
+    chunk.clear();
     chunk["id"] = messageId;
     chunk["from"] = kMessageSenderId;
     chunk["to"] = target;
     chunk["seq"] = static_cast<uint32_t>(chunkIndex + 1);
     chunk["chunks"] = totalChunks;
     chunk["last"] = (chunkIndex + 1) >= totalChunks;
-    chunk["data"] = encoded;
+    chunk["data"] = encoded.data();
     const uint64_t chunkTs = currentUnixMs();
     if (chunkTs > 0) {
       chunk["ts"] = chunkTs;
     }
 
-    if (!ctx.gateway->sendNodeEvent("msg.file.chunk", chunk)) {
+    if (!sendGatewayEventWithRetry(ctx, "msg.file.chunk", chunk, backgroundTick)) {
       file.close();
-      ctx.uiRuntime->showToast("File", "File chunk send failed", 1700, backgroundTick);
+      ctx.uiRuntime->showToast("File",
+                        withGatewayErrorSuffix("File chunk send failed", ctx.gateway),
+                        1800,
+                        backgroundTick);
       return;
     }
 
     ++chunkIndex;
-    if (backgroundTick) {
+    if (backgroundTick && ((chunkIndex % 8U) == 0U)) {
       backgroundTick();
     }
   }
   file.close();
 
   if (chunkIndex != totalChunks) {
-    ctx.uiRuntime->showToast("File", "File send incomplete", 1700, backgroundTick);
+    ctx.uiRuntime->showToast("File",
+                      withGatewayErrorSuffix("File send incomplete", ctx.gateway),
+                      1800,
+                      backgroundTick);
     return;
   }
 
@@ -1229,7 +1523,7 @@ void applyRuntimeConfig(AppContext &ctx,
   } else if (ctx.config.bleAutoConnect) {
     String bleErr;
     if (!ctx.ble->connectToDevice(ctx.config.bleDeviceAddress,
-                                  ctx.config.bleDeviceName,
+                                  effectiveDeviceName(ctx.config),
                                   &bleErr)) {
       ctx.uiRuntime->showToast("BLE", bleErr, 1500, backgroundTick);
     }
@@ -1268,6 +1562,7 @@ std::vector<String> buildStatusLines(AppContext &ctx) {
                   " (Rx " + String(static_cast<unsigned long>(receivedCount)) +
                   " / Tx " + String(static_cast<unsigned long>(sentCount)) + ")");
   lines.push_back("Auth Mode: " + String(gatewayAuthModeName(ctx.config.gatewayAuthMode)));
+  lines.push_back("Device Name: " + effectiveDeviceName(ctx.config));
   lines.push_back("Device Token: " + boolLabel(!ctx.config.gatewayDeviceToken.isEmpty()));
   lines.push_back("Device ID: " +
                   (ctx.config.gatewayDeviceId.isEmpty() ? String("(empty)")

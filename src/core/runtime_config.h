@@ -8,8 +8,11 @@ enum class GatewayAuthMode : uint8_t {
   Password = 1,
 };
 
+constexpr size_t kRuntimeDeviceNameMaxLen = 31;
+
 struct RuntimeConfig {
   uint32_t version = 2;
+  String deviceName;
   String wifiSsid;
   String wifiPassword;
   String gatewayUrl;
@@ -21,7 +24,6 @@ struct RuntimeConfig {
   String gatewayDevicePrivateKey;
   String gatewayDeviceToken;
   bool autoConnect = false;
-  String bleDeviceName;
   String bleDeviceAddress;
   bool bleAutoConnect = false;
   String appMarketGithubRepo;
@@ -38,6 +40,7 @@ enum class ConfigLoadSource : uint8_t {
 };
 
 RuntimeConfig makeDefaultConfig();
+String effectiveDeviceName(const RuntimeConfig &config);
 
 bool validateConfig(const RuntimeConfig &config, String *error = nullptr);
 bool hasGatewayCredentials(const RuntimeConfig &config);

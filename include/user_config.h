@@ -58,8 +58,9 @@
 // PN532 NFC (I2C)
 #define USER_NFC_I2C_SDA 8
 #define USER_NFC_I2C_SCL 18
-#define USER_NFC_IRQ_PIN 7
-#define USER_NFC_RESET_PIN 42
+// LilyGo reference wiring: IRQ=17, RST=45 (avoid MIC DATA GPIO42 conflict).
+#define USER_NFC_IRQ_PIN 17
+#define USER_NFC_RESET_PIN 45
 // RC522 RFID (SPI shared with TFT/CC1101)
 #define USER_RFID_SS_PIN 2
 #define USER_RFID_RST_PIN 1
@@ -83,10 +84,22 @@
 #define USER_NTP_SERVER_1 "pool.ntp.org"
 #define USER_NTP_SERVER_2 "time.nist.gov"
 // Periodic UNIX time fallback source (UTC). Used to correct clock drift.
-#define USER_UNIX_TIME_SERVER_URL "https://worldclockapi.com/api/json/utc/now"
+#define USER_UNIX_TIME_SERVER_URL "http://worldtimeapi.org/api/timezone/Etc/UTC"
 
 // Display backlight brightness percent (0~100)
 #define USER_DISPLAY_BRIGHTNESS_PERCENT 100
+
+// Enable periodic heap usage tracing on Serial (0:off, 1:on)
+#define USER_MEM_TRACE_ENABLED 0
+// Enable input raw trace logs (GPIO/encoder) on Serial (0:off, 1:on)
+#define USER_INPUT_TRACE_ENABLED 0
+
+// Input pins (LilyGo T-Embed CC1101 defaults)
+// Change these if your board revision uses different encoder/button GPIOs.
+#define USER_ENCODER_A_PIN 4
+#define USER_ENCODER_B_PIN 5
+#define USER_ENCODER_OK_PIN 0
+#define USER_ENCODER_BACK_PIN 6
 
 // Battery gauge (BQ27220 over I2C on T-Embed CC1101)
 #define USER_BATTERY_GAUGE_ENABLED 1

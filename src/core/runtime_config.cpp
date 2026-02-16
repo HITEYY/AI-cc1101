@@ -50,6 +50,19 @@ bool isPlaceholder(const char *value) {
   return strncmp(value, "REPLACE_WITH_", 13) == 0;
 }
 
+String trimDeviceName(String value) {
+  value.trim();
+  return value;
+}
+
+String defaultDeviceNameValue() {
+  String name = trimDeviceName(String(USER_OPENCLAW_DISPLAY_NAME));
+  if (name.isEmpty()) {
+    name = "OpenClaw Node";
+  }
+  return name;
+}
+
 bool startsWithWsScheme(const String &url) {
   return url.startsWith("ws://") || url.startsWith("wss://");
 }
@@ -513,6 +526,7 @@ uint8_t sanitizeDisplayBrightnessPercent(int value) {
 
 void toJson(const RuntimeConfig &config, JsonObject obj) {
   obj["version"] = config.version;
+  obj["deviceName"] = config.deviceName;
   obj["wifiSsid"] = config.wifiSsid;
   obj["wifiPassword"] = config.wifiPassword;
   obj["gatewayUrl"] = config.gatewayUrl;
@@ -524,7 +538,6 @@ void toJson(const RuntimeConfig &config, JsonObject obj) {
   obj["gatewayDevicePrivateKey"] = config.gatewayDevicePrivateKey;
   obj["gatewayDeviceToken"] = config.gatewayDeviceToken;
   obj["autoConnect"] = config.autoConnect;
-  obj["bleDeviceName"] = config.bleDeviceName;
   obj["bleDeviceAddress"] = config.bleDeviceAddress;
   obj["bleAutoConnect"] = config.bleAutoConnect;
   obj["appMarketGithubRepo"] = config.appMarketGithubRepo;
@@ -536,6 +549,15 @@ void toJson(const RuntimeConfig &config, JsonObject obj) {
 
 void fromJson(const JsonObjectConst &obj, RuntimeConfig &config) {
   config.version = obj["version"] | kConfigVersion;
+  if (obj.containsKey("deviceName")) {
+    config.deviceName = String(static_cast<const char *>(obj["deviceName"] | ""));
+  } else {
+    config.deviceName = defaultDeviceNameValue();
+  }
+  config.deviceName = trimDeviceName(config.deviceName);
+  if (config.deviceName.isEmpty()) {
+    config.deviceName = defaultDeviceNameValue();
+  }
   config.wifiSsid = String(static_cast<const char *>(obj["wifiSsid"] | ""));
   config.wifiPassword = String(static_cast<const char *>(obj["wifiPassword"] | ""));
   config.gatewayUrl = String(static_cast<const char *>(obj["gatewayUrl"] | ""));
@@ -551,7 +573,6 @@ void fromJson(const JsonObjectConst &obj, RuntimeConfig &config) {
   config.gatewayDeviceToken =
       String(static_cast<const char *>(obj["gatewayDeviceToken"] | ""));
   config.autoConnect = obj["autoConnect"] | false;
-  config.bleDeviceName = String(static_cast<const char *>(obj["bleDeviceName"] | ""));
   config.bleDeviceAddress = String(static_cast<const char *>(obj["bleDeviceAddress"] | ""));
   config.bleAutoConnect = obj["bleAutoConnect"] | false;
   config.appMarketGithubRepo =
@@ -572,6 +593,7 @@ void fromJson(const JsonObjectConst &obj, RuntimeConfig &config) {
 RuntimeConfig makeDefaultConfig() {
   RuntimeConfig config;
   config.version = kConfigVersion;
+  config.deviceName = defaultDeviceNameValue();
 
   if (!isPlaceholder(USER_WIFI_SSID)) {
     config.wifiSsid = USER_WIFI_SSID;
@@ -611,6 +633,17 @@ RuntimeConfig makeDefaultConfig() {
   return config;
 }
 
+String effectiveDeviceName(const RuntimeConfig &config) {
+  String name = trimDeviceName(config.deviceName);
+  if (name.isEmpty()) {
+    name = defaultDeviceNameValue();
+  }
+  if (name.length() > kRuntimeDeviceNameMaxLen) {
+    name = name.substring(0, kRuntimeDeviceNameMaxLen);
+  }
+  return name;
+}
+
 bool hasGatewayCredentials(const RuntimeConfig &config) {
   if (!config.gatewayDeviceToken.isEmpty()) {
     return true;
@@ -622,6 +655,21 @@ bool hasGatewayCredentials(const RuntimeConfig &config) {
 }
 
 bool validateConfig(const RuntimeConfig &config, String *error) {
+  String deviceName = trimDeviceName(config.deviceName);
+  if (deviceName.isEmpty()) {
+    if (error) {
+      *error = "Device name cannot be empty";
+    }
+    return false;
+  }
+
+  if (deviceName.length() > kRuntimeDeviceNameMaxLen) {
+    if (error) {
+      *error = "Device name must be 1~31 chars";
+    }
+    return false;
+  }
+
   if (config.wifiSsid.isEmpty() && !config.wifiPassword.isEmpty()) {
     if (error) {
       *error = "Wi-Fi password exists but SSID is empty";

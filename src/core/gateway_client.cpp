@@ -3,6 +3,7 @@
 #include <Ed25519.h>
 #include <SHA256.h>
 #include <WiFi.h>
+#include <esp_heap_caps.h>
 #include <esp_system.h>
 #include <mbedtls/base64.h>
 #include <ctype.h>
@@ -20,6 +21,11 @@ constexpr int OPENCLAW_PROTOCOL_MAX = 3;
 
 constexpr unsigned long kReconnectRetryMs = 2000UL;
 constexpr unsigned long kConnectDelayMs = 750UL;
+constexpr unsigned long kLowMemRetryMs = 8000UL;
+constexpr unsigned long kTlsFailMaxBackoffMs = 30000UL;
+constexpr unsigned long kConnectAttemptTimeoutMs = 9000UL;
+constexpr uint32_t kTlsMinInternalFreeBytes = 36000U;
+constexpr uint32_t kTlsMinInternalLargestBytes = 18000U;
 
 constexpr size_t kDevicePrivateKeyLen = 32;
 constexpr size_t kDevicePublicKeyLen = 32;
@@ -27,6 +33,7 @@ constexpr size_t kDeviceSignatureLen = 64;
 constexpr size_t kGatewayFrameDocCapacity = 8192;
 constexpr size_t kGatewayFrameFilterCapacity = 1024;
 constexpr size_t kMaxGatewayFrameBytes = 131072;
+constexpr size_t kMaxGatewaySendFrameBytes = 6144;
 constexpr size_t kMaxMsgIdLen = 96;
 constexpr size_t kMaxMsgMetaLen = 64;
 constexpr size_t kMaxMsgTextLen = 768;
@@ -137,6 +144,35 @@ void clampInboxMessage(GatewayInboxMessage &message) {
   clampString(message.text, kMaxMsgTextLen);
 }
 
+bool hasTlsHeapHeadroom() {
+  const uint32_t freeBytes = heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+  const uint32_t largest =
+      heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+  return freeBytes >= kTlsMinInternalFreeBytes &&
+         largest >= kTlsMinInternalLargestBytes;
+}
+
+String wsReasonText(const uint8_t *payload, size_t length) {
+  if (!payload || length == 0) {
+    return "";
+  }
+
+  String reason;
+  reason.reserve(length);
+  for (size_t i = 0; i < length; ++i) {
+    const char c = static_cast<char>(payload[i]);
+    if ((c < 32 || c > 126) && c != '\t') {
+      return "";
+    }
+    reason += c;
+  }
+  reason.trim();
+  if (reason.length() > 96) {
+    reason = reason.substring(0, 96);
+  }
+  return reason;
+}
+
 }  // namespace
 
 void GatewayClient::begin() {
@@ -146,7 +182,7 @@ void GatewayClient::begin() {
   ws_.onEvent([this](WStype_t type, uint8_t *payload, size_t length) {
     onWsEvent(type, payload, length);
   });
-  ws_.setReconnectInterval(5000);
+  ws_.setReconnectInterval(kReconnectRetryMs);
   ws_.enableHeartbeat(15000, 3000, 2);
 
   initialized_ = true;
@@ -180,8 +216,10 @@ void GatewayClient::disconnectNow() {
   connectChallengeTsMs_ = 0;
   connectQueuedAtMs_ = 0;
   connectSent_ = false;
+  connectAttemptStartedMs_ = 0;
   connectUsedDeviceToken_ = false;
   connectCanFallbackToShared_ = false;
+  tlsFailStreak_ = 0;
 
   if (wsStarted_) {
     ws_.disconnect();
@@ -204,9 +242,41 @@ void GatewayClient::tick() {
     ws_.loop();
   }
 
+  if (wsStarted_ && !wsConnected_ && connectAttemptStartedMs_ > 0) {
+    const unsigned long now = millis();
+    if (now - connectAttemptStartedMs_ >= kConnectAttemptTimeoutMs) {
+      ws_.disconnect();
+      wsStarted_ = false;
+      gatewayReady_ = false;
+      connectSent_ = false;
+      connectQueuedAtMs_ = 0;
+      connectAttemptStartedMs_ = 0;
+      if (tlsFailStreak_ < 0xFFU) {
+        ++tlsFailStreak_;
+      }
+      lastConnectAttemptMs_ = now;
+      if (config_.gatewayUrl.startsWith("wss://")) {
+        lastError_ = "TLS connect timeout; retrying";
+      } else {
+        lastError_ = "Gateway connect timeout";
+      }
+    }
+  }
+
   if (shouldConnect_ && !wsStarted_) {
     const unsigned long now = millis();
-    if (now - lastConnectAttemptMs_ >= kReconnectRetryMs) {
+    unsigned long retryMs = hasTlsHeapHeadroom() ? kReconnectRetryMs : kLowMemRetryMs;
+    if (tlsFailStreak_ > 0) {
+      const uint8_t shift = tlsFailStreak_ > 4 ? 4 : tlsFailStreak_;
+      const unsigned long backoff = kReconnectRetryMs << shift;
+      if (backoff > retryMs) {
+        retryMs = backoff;
+      }
+      if (retryMs > kTlsFailMaxBackoffMs) {
+        retryMs = kTlsFailMaxBackoffMs;
+      }
+    }
+    if (now - lastConnectAttemptMs_ >= retryMs) {
       startWebSocket();
     }
   }
@@ -250,7 +320,10 @@ GatewayStatus GatewayClient::status() const {
 }
 
 bool GatewayClient::sendNodeEvent(const char *eventName, JsonDocument &payloadDoc) {
-  DynamicJsonDocument params(2048);
+  if (!gatewayReady_) {
+    return false;
+  }
+  StaticJsonDocument<2048> params;
   params["event"] = eventName;
   params["payload"] = payloadDoc.as<JsonVariantConst>();
   return sendRequest("node.event", params, nullptr);
@@ -259,7 +332,7 @@ bool GatewayClient::sendNodeEvent(const char *eventName, JsonDocument &payloadDo
 bool GatewayClient::sendInvokeOk(const String &invokeId,
                                  const String &nodeId,
                                  JsonDocument &payloadDoc) {
-  DynamicJsonDocument params(4096);
+  StaticJsonDocument<4096> params;
   params["id"] = invokeId;
   params["nodeId"] = nodeId;
   params["ok"] = true;
@@ -271,7 +344,7 @@ bool GatewayClient::sendInvokeError(const String &invokeId,
                                     const String &nodeId,
                                     const char *code,
                                     const String &message) {
-  DynamicJsonDocument params(1024);
+  StaticJsonDocument<1024> params;
   params["id"] = invokeId;
   params["nodeId"] = nodeId;
   params["ok"] = false;
@@ -303,6 +376,8 @@ void GatewayClient::clearInbox() {
 void GatewayClient::onWsEvent(WStype_t type, uint8_t *payload, size_t length) {
   switch (type) {
     case WStype_DISCONNECTED:
+      {
+      const String wsReason = wsReasonText(payload, length);
       wsConnected_ = false;
       gatewayReady_ = false;
       connectRequestId_ = "";
@@ -310,13 +385,22 @@ void GatewayClient::onWsEvent(WStype_t type, uint8_t *payload, size_t length) {
       connectChallengeTsMs_ = 0;
       connectQueuedAtMs_ = 0;
       connectSent_ = false;
+      connectAttemptStartedMs_ = 0;
       connectUsedDeviceToken_ = false;
       connectCanFallbackToShared_ = false;
       wsStarted_ = false;
-      if (shouldConnect_ && !lastError_.length()) {
-        lastError_ = "Gateway disconnected";
+      if (shouldConnect_ && !gatewayReady_ && tlsFailStreak_ < 0xFFU) {
+        ++tlsFailStreak_;
+      }
+      if (shouldConnect_) {
+        if (wsReason.length()) {
+          lastError_ = "Gateway disconnected: " + wsReason;
+        } else if (!lastError_.length()) {
+          lastError_ = "Gateway disconnected";
+        }
       }
       break;
+      }
 
     case WStype_CONNECTED:
       wsConnected_ = true;
@@ -327,8 +411,10 @@ void GatewayClient::onWsEvent(WStype_t type, uint8_t *payload, size_t length) {
       connectChallengeTsMs_ = 0;
       connectQueuedAtMs_ = millis();
       connectSent_ = false;
+      connectAttemptStartedMs_ = 0;
       connectUsedDeviceToken_ = false;
       connectCanFallbackToShared_ = false;
+      tlsFailStreak_ = 0;
       break;
 
     case WStype_TEXT:
@@ -336,8 +422,22 @@ void GatewayClient::onWsEvent(WStype_t type, uint8_t *payload, size_t length) {
       break;
 
     case WStype_ERROR:
-      lastError_ = "WebSocket error";
+      {
+      const String wsReason = wsReasonText(payload, length);
+      lastError_ = wsReason.length() ? ("WebSocket error: " + wsReason) : String("WebSocket error");
+      if (tlsFailStreak_ < 0xFFU) {
+        ++tlsFailStreak_;
+      }
+      ws_.disconnect();
+      wsStarted_ = false;
+      wsConnected_ = false;
+      gatewayReady_ = false;
+      connectSent_ = false;
+      connectQueuedAtMs_ = 0;
+      connectAttemptStartedMs_ = 0;
+      lastConnectAttemptMs_ = millis();
       break;
+      }
 
     default:
       break;
@@ -345,6 +445,12 @@ void GatewayClient::onWsEvent(WStype_t type, uint8_t *payload, size_t length) {
 }
 
 void GatewayClient::startWebSocket() {
+  if (!hasTlsHeapHeadroom()) {
+    lastError_ = "Gateway retry deferred (low heap)";
+    lastConnectAttemptMs_ = millis();
+    return;
+  }
+
   String reason;
   if (!canStartConnection(&reason)) {
     lastError_ = reason;
@@ -376,6 +482,7 @@ void GatewayClient::startWebSocket() {
   connectChallengeTsMs_ = 0;
   connectQueuedAtMs_ = 0;
   connectSent_ = false;
+  connectAttemptStartedMs_ = millis();
   connectUsedDeviceToken_ = false;
   connectCanFallbackToShared_ = false;
   lastConnectAttemptMs_ = millis();
@@ -421,8 +528,19 @@ bool GatewayClient::sendRequest(const char *method,
   frame["method"] = method;
   frame["params"] = paramsDoc.as<JsonVariantConst>();
 
+  const size_t bodyLen = measureJson(frame);
+  if (bodyLen == 0 || bodyLen >= kMaxGatewaySendFrameBytes) {
+    lastError_ = "Gateway send frame too large";
+    return false;
+  }
+
   String body;
-  serializeJson(frame, body);
+  body.reserve(bodyLen + 1U);
+  const size_t written = serializeJson(frame, body);
+  if (written != bodyLen || body.length() != bodyLen) {
+    lastError_ = "Gateway send serialize failed";
+    return false;
+  }
 
   const bool sent = ws_.sendTXT(body);
   if (sent && requestIdOut) {
@@ -491,7 +609,7 @@ void GatewayClient::sendConnectRequest() {
 
   JsonObject client = params.createNestedObject("client");
   client["id"] = OPENCLAW_CLIENT_ID;
-  client["displayName"] = USER_OPENCLAW_DISPLAY_NAME;
+  client["displayName"] = effectiveDeviceName(config_);
   client["version"] = OPENCLAW_CLIENT_VERSION;
   client["platform"] = "esp32s3";
   client["deviceFamily"] = "lilygo-t-embed-cc1101";
@@ -699,7 +817,8 @@ void GatewayClient::handleGatewayEvent(JsonObjectConst frame) {
       connectNonce_ = String(static_cast<const char *>(payload["nonce"] | ""));
       connectChallengeTsMs_ = payload["ts"] | static_cast<uint64_t>(0);
       if (!connectSent_ && !connectNonce_.isEmpty()) {
-        sendConnectRequest();
+        // Defer connect request to tick() to avoid deep call stacks inside WS callback.
+        connectQueuedAtMs_ = millis();
       }
     }
     return;
