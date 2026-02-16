@@ -73,7 +73,6 @@ void GatewayClient::disconnectNow() {
   connectSent_ = false;
   connectUsedDeviceToken_ = false;
   connectCanFallbackToShared_ = false;
-  clearResponses();
 
   if (wsStarted_) {
     ws_.disconnect();
@@ -141,17 +140,11 @@ GatewayStatus GatewayClient::status() const {
   return s;
 }
 
-bool GatewayClient::sendGatewayRequest(const char *method,
-                                       JsonDocument &paramsDoc,
-                                       String *requestIdOut) {
-  return sendRequest(method, paramsDoc, requestIdOut);
-}
-
 bool GatewayClient::sendNodeEvent(const char *eventName, JsonDocument &payloadDoc) {
   DynamicJsonDocument params(2048);
   params["event"] = eventName;
   params["payload"] = payloadDoc.as<JsonVariantConst>();
-  return sendGatewayRequest("node.event", params, nullptr);
+  return sendRequest("node.event", params, nullptr);
 }
 
 bool GatewayClient::sendInvokeOk(const String &invokeId,
@@ -162,7 +155,7 @@ bool GatewayClient::sendInvokeOk(const String &invokeId,
   params["nodeId"] = nodeId;
   params["ok"] = true;
   params["payload"] = payloadDoc.as<JsonVariantConst>();
-  return sendGatewayRequest("node.invoke.result", params, nullptr);
+  return sendRequest("node.invoke.result", params, nullptr);
 }
 
 bool GatewayClient::sendInvokeError(const String &invokeId,
@@ -176,36 +169,7 @@ bool GatewayClient::sendInvokeError(const String &invokeId,
   JsonObject error = params.createNestedObject("error");
   error["code"] = code;
   error["message"] = message;
-  return sendGatewayRequest("node.invoke.result", params, nullptr);
-}
-
-bool GatewayClient::takeResponse(const String &requestId,
-                                 bool *okOut,
-                                 String *errorMessageOut) {
-  String lookup = requestId;
-  lookup.trim();
-  if (lookup.isEmpty()) {
-    return false;
-  }
-
-  for (size_t i = 0; i < kResponseCapacity; ++i) {
-    PendingResponse &slot = responses_[i];
-    if (!slot.used || slot.requestId != lookup) {
-      continue;
-    }
-    if (okOut) {
-      *okOut = slot.ok;
-    }
-    if (errorMessageOut) {
-      *errorMessageOut = slot.errorMessage;
-    }
-    slot.used = false;
-    slot.requestId = "";
-    slot.ok = false;
-    slot.errorMessage = "";
-    return true;
-  }
-  return false;
+  return sendRequest("node.invoke.result", params, nullptr);
 }
 
 size_t GatewayClient::inboxCount() const {
@@ -227,41 +191,6 @@ void GatewayClient::clearInbox() {
   inboxCount_ = 0;
 }
 
-void GatewayClient::storeResponse(const String &requestId,
-                                  bool ok,
-                                  const String &errorMessage) {
-  if (requestId.isEmpty()) {
-    return;
-  }
-
-  for (size_t i = 0; i < kResponseCapacity; ++i) {
-    PendingResponse &slot = responses_[i];
-    if (!slot.used || slot.requestId != requestId) {
-      continue;
-    }
-    slot.ok = ok;
-    slot.errorMessage = errorMessage;
-    return;
-  }
-
-  PendingResponse &slot = responses_[responseWritePos_];
-  slot.used = true;
-  slot.requestId = requestId;
-  slot.ok = ok;
-  slot.errorMessage = errorMessage;
-  responseWritePos_ = (responseWritePos_ + 1U) % kResponseCapacity;
-}
-
-void GatewayClient::clearResponses() {
-  for (size_t i = 0; i < kResponseCapacity; ++i) {
-    responses_[i].used = false;
-    responses_[i].requestId = "";
-    responses_[i].ok = false;
-    responses_[i].errorMessage = "";
-  }
-  responseWritePos_ = 0;
-}
-
 void GatewayClient::onWsEvent(WStype_t type, uint8_t *payload, size_t length) {
   switch (type) {
     case WStype_DISCONNECTED:
@@ -274,7 +203,6 @@ void GatewayClient::onWsEvent(WStype_t type, uint8_t *payload, size_t length) {
       connectSent_ = false;
       connectUsedDeviceToken_ = false;
       connectCanFallbackToShared_ = false;
-      clearResponses();
       wsStarted_ = false;
       if (shouldConnect_ && !lastError_.length()) {
         lastError_ = "Gateway disconnected";
@@ -292,7 +220,6 @@ void GatewayClient::onWsEvent(WStype_t type, uint8_t *payload, size_t length) {
       connectSent_ = false;
       connectUsedDeviceToken_ = false;
       connectCanFallbackToShared_ = false;
-      clearResponses();
       break;
 
     case WStype_TEXT:
@@ -604,18 +531,15 @@ void GatewayClient::handleGatewayFrame(const char *text, size_t len) {
 
 void GatewayClient::handleGatewayResponse(JsonObjectConst frame) {
   const String id = frame["id"].as<String>();
-  const bool ok = frame["ok"] | false;
-  const String errorMessage =
-      String(static_cast<const char *>(frame["error"]["message"] | ""));
-  storeResponse(id, ok, errorMessage);
-
   if (id != connectRequestId_) {
     return;
   }
 
+  const bool ok = frame["ok"] | false;
   if (!ok) {
     gatewayReady_ = false;
-    const String message = errorMessage.isEmpty() ? "Gateway connect rejected" : errorMessage;
+    const String message = String(static_cast<const char *>(frame["error"]["message"] |
+                                                              "Gateway connect rejected"));
 
     if (connectUsedDeviceToken_ && connectCanFallbackToShared_) {
       config_.gatewayDeviceToken = "";

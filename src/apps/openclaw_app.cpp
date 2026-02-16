@@ -32,7 +32,6 @@ constexpr const char *kSessionResetPrompt =
     "to 1-3 sentences and ask what they want to do. If the runtime model differs from "
     "default_model in the system prompt, mention the default model. Do not mention internal "
     "steps, files, tools, or reasoning.";
-constexpr unsigned long kSessionResetWaitMs = 17000UL;
 constexpr size_t kMessageChunkBytes = 960;
 constexpr uint32_t kMaxVoiceBytes = 2097152;
 constexpr uint32_t kMaxFileBytes = 4194304;
@@ -370,87 +369,55 @@ bool ensureGatewayReady(AppContext &ctx,
   return true;
 }
 
-bool waitGatewayResponse(AppContext &ctx,
-                         const String &requestId,
-                         unsigned long timeoutMs,
-                         const std::function<void()> &backgroundTick,
-                         bool *okOut = nullptr,
-                         String *errorOut = nullptr) {
-  if (requestId.isEmpty()) {
-    return false;
-  }
-
-  const unsigned long startedAt = millis();
-  while (millis() - startedAt < timeoutMs) {
-    bool ok = false;
-    String error;
-    if (ctx.gateway->takeResponse(requestId, &ok, &error)) {
-      if (okOut) {
-        *okOut = ok;
-      }
-      if (errorOut) {
-        *errorOut = error;
-      }
-      return true;
-    }
-
-    backgroundTick();
-    delay(20);
-  }
-
-  return false;
-}
-
-bool resetMainMessengerSession(AppContext &ctx,
-                               const std::function<void()> &backgroundTick) {
+bool sendMainSessionResetGreeting(AppContext &ctx,
+                                  const std::function<void()> &backgroundTick) {
   if (!ensureGatewayReady(ctx, backgroundTick)) {
     return false;
   }
 
   const String sessionKey = buildMainMessengerSessionKey();
-  DynamicJsonDocument params(256);
-  params["key"] = sessionKey;
-  params["reason"] = "new";
-
-  String requestId;
-  if (!ctx.gateway->sendGatewayRequest("sessions.reset", params, &requestId)) {
-    ctx.uiRuntime->showToast("Messenger", "Session reset send failed", 1700, backgroundTick);
-    return false;
-  }
-
-  bool resetOk = false;
-  String resetError;
-  if (!waitGatewayResponse(ctx,
-                           requestId,
-                           kSessionResetWaitMs,
-                           backgroundTick,
-                           &resetOk,
-                           &resetError)) {
-    ctx.uiRuntime->showToast("Messenger", "Session reset timeout", 1700, backgroundTick);
-    return false;
-  }
-
-  if (!resetOk) {
-    if (resetError.isEmpty()) {
-      resetError = "Session reset rejected";
-    }
-    ctx.uiRuntime->showToast("Messenger", trimMiddle(resetError, 42), 2000, backgroundTick);
-    return false;
-  }
-
   gMessengerSessionKey = sessionKey;
   gSubscribedSessionKey = "";
   gSubscribedConnectOkMs = 0;
+
+  if (!ensureMessengerSessionSubscription(ctx, backgroundTick)) {
+    return false;
+  }
+
+  String payloadText = "/new ";
+  payloadText += kSessionResetPrompt;
+
+  DynamicJsonDocument payload(2048);
+  const String messageId = makeMessageId("txt");
+  payload["message"] = payloadText;
+  payload["sessionKey"] = sessionKey;
+  payload["deliver"] = false;
+  const uint64_t ts = currentUnixMs();
+
+  if (!ctx.gateway->sendNodeEvent("agent.request", payload)) {
+    ctx.uiRuntime->showToast("Messenger", "Text send failed", 1500, backgroundTick);
+    return false;
+  }
+
   clearMessengerMessages(ctx);
+
+  GatewayInboxMessage sent;
+  sent.id = messageId;
+  sent.event = "agent.request";
+  sent.type = "text";
+  sent.from = kMessageSenderId;
+  sent.to = kDefaultSessionAgentId;
+  sent.text = kSessionResetPrompt;
+  sent.tsMs = ts;
+  pushOutbox(sent);
+
+  ctx.uiRuntime->showToast("Messenger", "Text sent", 1100, backgroundTick);
   return true;
 }
 
 void startMainSessionWithGreeting(AppContext &ctx,
                                   const std::function<void()> &backgroundTick) {
-  if (!resetMainMessengerSession(ctx, backgroundTick)) {
-    return;
-  }
-  sendTextPayload(ctx, kSessionResetPrompt, backgroundTick);
+  sendMainSessionResetGreeting(ctx, backgroundTick);
 }
 
 bool sendTextPayload(AppContext &ctx,

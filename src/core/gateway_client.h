@@ -54,9 +54,6 @@ class GatewayClient {
   String lastError() const;
   GatewayStatus status() const;
 
-  bool sendGatewayRequest(const char *method,
-                          JsonDocument &paramsDoc,
-                          String *requestIdOut = nullptr);
   bool sendNodeEvent(const char *eventName, JsonDocument &payloadDoc);
   bool sendInvokeOk(const String &invokeId,
                     const String &nodeId,
@@ -65,9 +62,6 @@ class GatewayClient {
                        const String &nodeId,
                        const char *code,
                        const String &message);
-  bool takeResponse(const String &requestId,
-                    bool *okOut = nullptr,
-                    String *errorMessageOut = nullptr);
 
   size_t inboxCount() const;
   bool inboxMessage(size_t index, GatewayInboxMessage &out) const;
@@ -125,8 +119,6 @@ class GatewayClient {
   String buildDeviceAuthPayload(uint64_t signedAtMs, const String &tokenForSignature) const;
   bool captureMessageEvent(const String &eventName, JsonObjectConst payload);
   void pushInboxMessage(const GatewayInboxMessage &message);
-  void storeResponse(const String &requestId, bool ok, const String &errorMessage);
-  void clearResponses();
   String readMessageString(JsonObjectConst payload,
                            const char *key1,
                            const char *key2 = nullptr,
@@ -138,16 +130,6 @@ class GatewayClient {
   GatewayInboxMessage inbox_[kInboxCapacity];
   size_t inboxStart_ = 0;
   size_t inboxCount_ = 0;
-
-  static constexpr size_t kResponseCapacity = 12;
-  struct PendingResponse {
-    bool used = false;
-    String requestId;
-    bool ok = false;
-    String errorMessage;
-  };
-  PendingResponse responses_[kResponseCapacity];
-  size_t responseWritePos_ = 0;
 
   String connectNonce_;
   uint64_t connectChallengeTsMs_ = 0;

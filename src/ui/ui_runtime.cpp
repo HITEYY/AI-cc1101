@@ -414,10 +414,9 @@ class UiRuntime::Impl {
   }
 
   const lv_font_t *font() const {
-    if (language == UiLanguage::Korean) {
-      return &lv_font_korean_ui_14;
-    }
-    return &lv_font_montserrat_14;
+    // Always use a font that contains Hangul glyphs so Korean text
+    // can render regardless of current UI language setting.
+    return &lv_font_korean_ui_14;
   }
 
   void service(const std::function<void()> *backgroundTick = nullptr) {
