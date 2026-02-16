@@ -320,6 +320,17 @@ String ellipsize(const String &text, size_t maxLen) {
   return text.substring(0, keepBytes) + "...";
 }
 
+const lv_font_t *uiBaseFontWithKoreanFallback() {
+  static lv_font_t combinedFont;
+  static bool initialized = false;
+  if (!initialized) {
+    memcpy(&combinedFont, &lv_font_montserrat_14, sizeof(lv_font_t));
+    combinedFont.fallback = &lv_font_korean_ui_14;
+    initialized = true;
+  }
+  return &combinedFont;
+}
+
 LauncherIconId iconIdFromLauncherIndex(int index) {
   switch (wrapIndex(index, 4)) {
     case 0:
@@ -414,9 +425,9 @@ class UiRuntime::Impl {
   }
 
   const lv_font_t *font() const {
-    // Always use a font that contains Hangul glyphs so Korean text
-    // can render regardless of current UI language setting.
-    return &lv_font_korean_ui_14;
+    // Keep Montserrat as primary for English readability and use Korean font
+    // as fallback so Hangul renders in any language mode.
+    return uiBaseFontWithKoreanFallback();
   }
 
   void service(const std::function<void()> *backgroundTick = nullptr) {
