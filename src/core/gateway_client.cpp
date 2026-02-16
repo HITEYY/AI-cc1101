@@ -97,6 +97,16 @@ String stripControlChatTags(const String &text) {
   return cleaned;
 }
 
+bool startsWithErrorMarker(const String &text) {
+  if (text.isEmpty()) {
+    return false;
+  }
+
+  String normalized = text;
+  normalized.trim();
+  return normalized.startsWith("[error]");
+}
+
 }  // namespace
 
 void GatewayClient::begin() {
@@ -1074,6 +1084,10 @@ bool GatewayClient::captureMessageEvent(const String &eventName, JsonObjectConst
     }
   }
   message.tsMs = tsMs > 0 ? tsMs : currentUnixMs();
+
+  if (startsWithErrorMarker(message.text)) {
+    return true;
+  }
 
   pushInboxMessage(message);
   return true;

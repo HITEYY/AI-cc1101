@@ -370,6 +370,16 @@ bool sendMainSessionResetGreeting(AppContext &ctx,
   }
 
   const String sessionKey = buildMainMessengerSessionKey();
+  const String previousSubscribedSessionKey = gSubscribedSessionKey;
+
+  if (!previousSubscribedSessionKey.isEmpty()) {
+    sendChatSessionEvent(ctx, "chat.unsubscribe", previousSubscribedSessionKey);
+  }
+  // Force default main session subscribe to be re-established.
+  if (previousSubscribedSessionKey != sessionKey) {
+    sendChatSessionEvent(ctx, "chat.unsubscribe", sessionKey);
+  }
+
   gMessengerSessionKey = sessionKey;
   gSubscribedSessionKey = "";
   gSubscribedConnectOkMs = 0;
