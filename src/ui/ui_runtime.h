@@ -76,6 +76,15 @@ class UiRuntime {
                  bool mask,
                  const std::function<void()> &backgroundTick);
 
+  bool numberWheelInput(const String &title,
+                        int minValue,
+                        int maxValue,
+                        int step,
+                        int &inOutValue,
+                        const std::function<void()> &backgroundTick,
+                        const String &suffix = "",
+                        const std::function<void(int)> &onValueChanged = std::function<void(int)>());
+
   void showProgressOverlay(const String &title,
                            const String &message,
                            int percent = -1);

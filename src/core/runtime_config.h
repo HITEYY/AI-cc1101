@@ -1,6 +1,7 @@
 #pragma once
 
 #include <Arduino.h>
+#include "user_config.h"
 
 enum class GatewayAuthMode : uint8_t {
   Token = 0,
@@ -27,7 +28,7 @@ struct RuntimeConfig {
   String appMarketReleaseAsset;
   String uiLanguage = "en";
   String timezoneTz = "UTC0";
-  uint8_t displayBrightnessPercent = 100;
+  uint8_t displayBrightnessPercent = USER_DISPLAY_BRIGHTNESS_PERCENT;
 };
 
 enum class ConfigLoadSource : uint8_t {

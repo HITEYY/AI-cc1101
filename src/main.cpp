@@ -35,6 +35,7 @@ bool gSleepDetectionArmed = false;
 constexpr unsigned long kDeepSleepHoldMs = 3000UL;
 constexpr unsigned long kSleepReleaseDebounceMs = 80UL;
 constexpr unsigned long kSleepReleasePollMs = 5UL;
+constexpr uint8_t kBacklightFullDuty = 254U;
 
 void enableTopButtonWakeup() {
   const gpio_num_t wakePin = static_cast<gpio_num_t>(boardpins::kEncoderBack);
@@ -148,7 +149,7 @@ void initBoardPower() {
 
   // Ensure TFT backlight is enabled after cold boot/wakeup.
   pinMode(boardpins::kTftBacklight, OUTPUT);
-  analogWrite(boardpins::kTftBacklight, 255);
+  analogWrite(boardpins::kTftBacklight, kBacklightFullDuty);
 
   Wire.begin(8, 18);
   if (gPmu.init(Wire, 8, 18, BQ25896_SLAVE_ADDRESS)) {

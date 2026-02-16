@@ -53,6 +53,8 @@ constexpr uint32_t kLauncherSide = 0x2D6F93;
 constexpr uint32_t kLauncherMuted = 0x8FB6CC;
 constexpr uint32_t kLauncherLine = 0x1A3344;
 constexpr uint32_t kLauncherCharging = 0x4CD964;
+// Avoid LEDC full-on edge behavior at max duty.
+constexpr uint8_t kBacklightPwmMaxDuty = 254U;
 
 uint8_t clampBrightnessPercent(int percent) {
   if (percent < 0) {
@@ -65,7 +67,8 @@ uint8_t clampBrightnessPercent(int percent) {
 }
 
 uint8_t brightnessPwmFromPercent(uint8_t percent) {
-  const unsigned int scaled = static_cast<unsigned int>(percent) * 255U;
+  const uint32_t scaled =
+      static_cast<uint32_t>(percent) * static_cast<uint32_t>(kBacklightPwmMaxDuty);
   return static_cast<uint8_t>((scaled + 50U) / 100U);
 }
 
@@ -181,10 +184,9 @@ class UiRuntime::Impl {
     return true;
   }
 
-  void applyBacklight() const {
+  void applyBacklight() {
     pinMode(boardpins::kTftBacklight, OUTPUT);
-    analogWrite(boardpins::kTftBacklight,
-                brightnessPwmFromPercent(displayBrightnessPercent));
+    analogWrite(boardpins::kTftBacklight, brightnessPwmFromPercent(displayBrightnessPercent));
   }
 
   void setDisplayBrightnessPercent(uint8_t percent) {
@@ -1280,6 +1282,164 @@ class UiRuntime::Impl {
     service(nullptr);
   }
 
+  void renderNumberWheel(const String &title,
+                         int selectedValue,
+                         int minValue,
+                         int maxValue,
+                         int step,
+                         const String &suffix,
+                         const String &footer) {
+    String subtitle = title;
+    subtitle += ": ";
+    subtitle += String(static_cast<long>(selectedValue));
+    subtitle += suffix;
+
+    int contentTop = 0;
+    int contentBottom = 0;
+    renderBase(title, subtitle, footer, contentTop, contentBottom);
+
+    const int w = lv_display_get_horizontal_resolution(port.display());
+    int areaH = contentBottom - contentTop + 1;
+    if (areaH < 1) {
+      areaH = 1;
+    }
+
+    int panelW = w - 26;
+    if (panelW < 96) {
+      panelW = w - 8;
+    }
+    if (panelW < 16) {
+      panelW = 16;
+    }
+
+    int panelH = areaH - 4;
+    if (panelH < 44) {
+      panelH = 44;
+    }
+    if (panelH > areaH) {
+      panelH = areaH;
+    }
+    if (panelH < 1) {
+      panelH = 1;
+    }
+
+    const int panelX = (w - panelW) / 2;
+    int panelY = contentTop + (areaH - panelH) / 2;
+    if (panelY < contentTop) {
+      panelY = contentTop;
+    }
+
+    lv_obj_t *panel = lv_obj_create(lv_screen_active());
+    disableScroll(panel);
+    lv_obj_remove_style_all(panel);
+    lv_obj_set_pos(panel, panelX, panelY);
+    lv_obj_set_size(panel, panelW, panelH);
+    lv_obj_set_style_radius(panel, 10, 0);
+    lv_obj_set_style_bg_color(panel, lv_color_hex(kClrPanel), 0);
+    lv_obj_set_style_bg_opa(panel, kOpa92, 0);
+    lv_obj_set_style_border_width(panel, 1, 0);
+    lv_obj_set_style_border_color(panel, lv_color_hex(kClrBorder), 0);
+    lv_obj_set_style_pad_all(panel, 0, 0);
+
+    int rowHeight = panelH / 5;
+    if (rowHeight < 10) {
+      rowHeight = 10;
+    }
+    int focusH = rowHeight;
+    if (focusH > panelH - 6) {
+      focusH = panelH - 6;
+    }
+    if (focusH < 8) {
+      focusH = 8;
+    }
+
+    const int focusY = (panelH - focusH) / 2;
+    const int focusCenterY = focusY + (focusH / 2);
+
+    lv_obj_t *focus = lv_obj_create(panel);
+    disableScroll(focus);
+    lv_obj_remove_style_all(focus);
+    constexpr int kFocusMarginX = 4;
+    int focusW = panelW - (kFocusMarginX * 2);
+    if (focusW < 1) {
+      focusW = 1;
+    }
+    const int focusX = (panelW - focusW) / 2;
+    lv_obj_set_pos(focus, focusX, focusY);
+    lv_obj_set_size(focus, focusW, focusH);
+    lv_obj_set_style_radius(focus, 8, 0);
+    lv_obj_set_style_bg_color(focus, lv_color_hex(kClrAccentSoft), 0);
+    lv_obj_set_style_bg_opa(focus, kOpa85, 0);
+    lv_obj_set_style_border_width(focus, 1, 0);
+    lv_obj_set_style_border_color(focus, lv_color_hex(kClrAccent), 0);
+
+    const int separatorW = panelW - 14;
+    if (separatorW > 2) {
+      const int separatorX = (panelW - separatorW) / 2;
+      lv_obj_t *sepTop = lv_obj_create(panel);
+      disableScroll(sepTop);
+      lv_obj_remove_style_all(sepTop);
+      lv_obj_set_pos(sepTop, separatorX, focusY - 1);
+      lv_obj_set_size(sepTop, separatorW, 1);
+      lv_obj_set_style_bg_color(sepTop, lv_color_hex(kClrAccent), 0);
+      lv_obj_set_style_bg_opa(sepTop, static_cast<lv_opa_t>(120), 0);
+
+      lv_obj_t *sepBottom = lv_obj_create(panel);
+      disableScroll(sepBottom);
+      lv_obj_remove_style_all(sepBottom);
+      lv_obj_set_pos(sepBottom, separatorX, focusY + focusH);
+      lv_obj_set_size(sepBottom, separatorW, 1);
+      lv_obj_set_style_bg_color(sepBottom, lv_color_hex(kClrAccent), 0);
+      lv_obj_set_style_bg_opa(sepBottom, static_cast<lv_opa_t>(120), 0);
+    }
+
+    if (step <= 0 || maxValue < minValue) {
+      service(nullptr);
+      return;
+    }
+
+    const int slotCount = ((maxValue - minValue) / step) + 1;
+    const int maxSelectableValue = minValue + ((slotCount - 1) * step);
+    const int rowOffsets[5] = {-2, -1, 0, 1, 2};
+
+    for (int i = 0; i < 5; ++i) {
+      const int offset = rowOffsets[i];
+      // Descending wheel: higher values are rendered above the center row.
+      const int value = selectedValue - (offset * step);
+      if (value < minValue || value > maxSelectableValue) {
+        continue;
+      }
+
+      String text = String(static_cast<long>(value));
+      text += suffix;
+
+      lv_obj_t *label = lv_label_create(panel);
+      const int labelW = panelW;
+      setSingleLineLabel(label, labelW, LV_TEXT_ALIGN_CENTER);
+      const bool isCenter = offset == 0;
+      if (isCenter) {
+        lv_obj_set_style_text_font(label, &lv_font_montserrat_18, kStyleAny);
+        lv_obj_set_style_text_color(label, lv_color_hex(0xE8F3FF), kStyleAny);
+        lv_obj_set_style_text_opa(label, LV_OPA_COVER, kStyleAny);
+      } else {
+        lv_obj_set_style_text_font(label, font(), kStyleAny);
+        lv_obj_set_style_text_color(label, lv_color_hex(kClrTextMuted), kStyleAny);
+        int distance = offset < 0 ? -offset : offset;
+        lv_opa_t textOpa = static_cast<lv_opa_t>(distance == 1 ? 180 : 110);
+        lv_obj_set_style_text_opa(label, textOpa, kStyleAny);
+      }
+      lv_label_set_text(label, text.c_str());
+
+      // Place each value by center point so selected text sits exactly in the
+      // vertical center of the focused slot.
+      lv_obj_set_width(label, LV_SIZE_CONTENT);
+      lv_obj_set_height(label, LV_SIZE_CONTENT);
+      lv_obj_align(label, LV_ALIGN_CENTER, 0, offset * rowHeight);
+    }
+
+    service(nullptr);
+  }
+
   void renderTextInput(const String &title,
                        const String &preview,
                        const std::vector<String> &keyLabels,
@@ -1872,6 +2032,85 @@ bool UiRuntime::confirm(const String &title,
                                 "OK   BACK",
                                 message);
   return selected == 0;
+}
+
+bool UiRuntime::numberWheelInput(const String &title,
+                                 int minValue,
+                                 int maxValue,
+                                 int step,
+                                 int &inOutValue,
+                                 const std::function<void()> &backgroundTick,
+                                 const String &suffix,
+                                 const std::function<void(int)> &onValueChanged) {
+  if (step <= 0 || maxValue < minValue) {
+    return false;
+  }
+
+  const int slotCount = ((maxValue - minValue) / step) + 1;
+  const int maxSelectableValue = minValue + ((slotCount - 1) * step);
+  if (slotCount <= 0) {
+    return false;
+  }
+
+  int value = inOutValue;
+  if (value < minValue) {
+    value = minValue;
+  }
+  if (value > maxSelectableValue) {
+    value = maxSelectableValue;
+  }
+  value = minValue + (((value - minValue) / step) * step);
+  if (onValueChanged) {
+    onValueChanged(value);
+  }
+
+  bool redraw = true;
+  unsigned long lastRefreshMs = millis();
+
+  while (true) {
+    const unsigned long now = millis();
+    if (redraw || now - lastRefreshMs >= kHeaderRefreshMs) {
+      impl_->renderNumberWheel(title,
+                               value,
+                               minValue,
+                               maxValue,
+                               step,
+                               suffix,
+                               "ROTATE Wheel   OK Save   BACK");
+      redraw = false;
+      lastRefreshMs = now;
+    }
+
+    impl_->service(&backgroundTick);
+    UiEvent ev = pollInput();
+
+    if (ev.delta != 0) {
+      int nextValue = value - (ev.delta * step);
+      if (nextValue < minValue) {
+        nextValue = minValue;
+      }
+      if (nextValue > maxSelectableValue) {
+        nextValue = maxSelectableValue;
+      }
+      if (nextValue != value) {
+        value = nextValue;
+        if (onValueChanged) {
+          onValueChanged(value);
+        }
+        redraw = true;
+      }
+    }
+
+    if (ev.ok) {
+      inOutValue = value;
+      return true;
+    }
+    if (ev.back) {
+      return false;
+    }
+
+    delay(kUiLoopDelayMs);
+  }
 }
 
 bool UiRuntime::textInput(const String &title,

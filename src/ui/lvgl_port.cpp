@@ -8,6 +8,7 @@
 namespace {
 
 constexpr uint16_t kBufferLines = 24;
+constexpr uint8_t kBacklightFullDuty = 254;
 
 }  // namespace
 
@@ -36,7 +37,7 @@ bool LvglPort::begin() {
 
   // Backlight can remain off after deep sleep; force it on when LVGL starts.
   pinMode(boardpins::kTftBacklight, OUTPUT);
-  analogWrite(boardpins::kTftBacklight, 255);
+  analogWrite(boardpins::kTftBacklight, kBacklightFullDuty);
 
   pinMode(boardpins::kTftCs, OUTPUT);
   digitalWrite(boardpins::kTftCs, HIGH);

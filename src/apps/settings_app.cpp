@@ -226,33 +226,6 @@ String displayBrightnessLabel(uint8_t percent) {
   return label;
 }
 
-bool parseBrightnessPercentInput(const String &input, uint8_t *outPercent) {
-  if (!outPercent) {
-    return false;
-  }
-
-  String normalized = input;
-  normalized.trim();
-  if (normalized.isEmpty()) {
-    return false;
-  }
-
-  for (size_t i = 0; i < normalized.length(); ++i) {
-    const char c = normalized.charAt(i);
-    if (c < '0' || c > '9') {
-      return false;
-    }
-  }
-
-  const long parsed = normalized.toInt();
-  if (parsed < 0 || parsed > 100) {
-    return false;
-  }
-
-  *outPercent = static_cast<uint8_t>(parsed);
-  return true;
-}
-
 void showBleKeyboardInput(AppContext &ctx,
                           const std::function<void()> &backgroundTick) {
   const BleStatus bs = ctx.ble->status();
@@ -523,26 +496,25 @@ void runSystemMenu(AppContext &ctx,
     }
 
     if (choice == 1) {
-      String brightnessInput = String(
-          static_cast<unsigned long>(ctx.config.displayBrightnessPercent));
-      if (!ctx.uiRuntime->textInput("Brightness (0-100)",
-                                    brightnessInput,
-                                    false,
-                                    backgroundTick)) {
+      const uint8_t originalBrightness = ctx.config.displayBrightnessPercent;
+      int brightnessPercent = static_cast<int>(originalBrightness);
+      if (!ctx.uiRuntime->numberWheelInput("Brightness",
+                                           0,
+                                           100,
+                                           1,
+                                           brightnessPercent,
+                                           backgroundTick,
+                                           "%",
+                                           [&](int value) {
+                                             ctx.uiRuntime->setDisplayBrightnessPercent(
+                                                 static_cast<uint8_t>(value));
+                                           })) {
+        ctx.uiRuntime->setDisplayBrightnessPercent(originalBrightness);
         continue;
       }
 
-      uint8_t brightnessPercent = 0;
-      if (!parseBrightnessPercentInput(brightnessInput, &brightnessPercent)) {
-        ctx.uiRuntime->showToast("System",
-                                 "Brightness must be 0~100",
-                                 1400,
-                                 backgroundTick);
-        continue;
-      }
-
-      ctx.config.displayBrightnessPercent = brightnessPercent;
-      ctx.uiRuntime->setDisplayBrightnessPercent(brightnessPercent);
+      ctx.config.displayBrightnessPercent = static_cast<uint8_t>(brightnessPercent);
+      ctx.uiRuntime->setDisplayBrightnessPercent(ctx.config.displayBrightnessPercent);
       markDirty(ctx);
       saveSettingsConfig(ctx, backgroundTick, "System");
       continue;
