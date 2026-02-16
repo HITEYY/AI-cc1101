@@ -318,6 +318,28 @@ bool ensureSdMountedForVoice(String *error = nullptr) {
   return mounted;
 }
 
+bool isRecordStopButtonPressed() {
+  return digitalRead(boardpins::kEncoderOk) == LOW ||
+         digitalRead(boardpins::kEncoderBack) == LOW;
+}
+
+void clearRecordStopButtonState(AppContext &ctx,
+                                const std::function<void()> &backgroundTick) {
+  const unsigned long startMs = millis();
+  while (isRecordStopButtonPressed()) {
+    if (backgroundTick) {
+      backgroundTick();
+    }
+    if (millis() - startMs > 1500UL) {
+      break;
+    }
+    delay(4);
+  }
+
+  // Drain one-shot press/release events generated while stopping recording.
+  ctx.uiRuntime->pollInput();
+}
+
 bool ensureGatewayReady(AppContext &ctx,
                         const std::function<void()> &backgroundTick) {
   const GatewayStatus status = ctx.gateway->status();
@@ -587,10 +609,22 @@ void recordVoiceFromMic(AppContext &ctx,
 
   String recordErr;
   uint32_t bytesWritten = 0;
-  const auto stopRequested = [&ctx]() {
-    UiEvent ev = ctx.uiRuntime->pollInput();
-    return ev.ok || ev.back || ev.okLong || ev.okCount != 0 ||
-           ev.backCount != 0 || ev.okLongCount != 0;
+  bool stoppedByButton = false;
+  bool stopArmed = false;
+  const unsigned long recordStartMs = millis();
+  const auto stopRequested = [&]() {
+    const unsigned long elapsedMs = millis() - recordStartMs;
+    if (!stopArmed) {
+      if (!isRecordStopButtonPressed() && elapsedMs >= 120UL) {
+        stopArmed = true;
+      }
+      return false;
+    }
+    if (isRecordStopButtonPressed()) {
+      stoppedByButton = true;
+      return true;
+    }
+    return false;
   };
   if (!recordMicWavToSd(voicePath,
                         maxSeconds,
@@ -598,12 +632,25 @@ void recordVoiceFromMic(AppContext &ctx,
                         stopRequested,
                         &recordErr,
                         &bytesWritten)) {
+    if (stoppedByButton && recordErr == "No audio captured") {
+      clearRecordStopButtonState(ctx, backgroundTick);
+      ctx.uiRuntime->showToast("Voice", "Recording canceled", 1100, backgroundTick);
+      return;
+    }
+
     ctx.uiRuntime->showToast("Voice",
                       recordErr.isEmpty() ? String("MIC recording failed")
                                           : recordErr,
                       1800,
                       backgroundTick);
+    if (stoppedByButton) {
+      clearRecordStopButtonState(ctx, backgroundTick);
+    }
     return;
+  }
+
+  if (stoppedByButton) {
+    clearRecordStopButtonState(ctx, backgroundTick);
   }
 
   if (bytesWritten > kMaxVoiceBytes) {
@@ -664,10 +711,22 @@ bool recordVoiceFromBle(AppContext &ctx,
 
   String recordErr;
   uint32_t bytesWritten = 0;
-  const auto stopRequested = [&ctx]() {
-    UiEvent ev = ctx.uiRuntime->pollInput();
-    return ev.ok || ev.back || ev.okLong || ev.okCount != 0 ||
-           ev.backCount != 0 || ev.okLongCount != 0;
+  bool stoppedByButton = false;
+  bool stopArmed = false;
+  const unsigned long recordStartMs = millis();
+  const auto stopRequested = [&]() {
+    const unsigned long elapsedMs = millis() - recordStartMs;
+    if (!stopArmed) {
+      if (!isRecordStopButtonPressed() && elapsedMs >= 120UL) {
+        stopArmed = true;
+      }
+      return false;
+    }
+    if (isRecordStopButtonPressed()) {
+      stoppedByButton = true;
+      return true;
+    }
+    return false;
   };
   if (!ctx.ble->recordAudioStreamWavToSd(voicePath,
                                          maxSeconds,
@@ -675,12 +734,25 @@ bool recordVoiceFromBle(AppContext &ctx,
                                          stopRequested,
                                          &recordErr,
                                          &bytesWritten)) {
+    if (stoppedByButton && recordErr == "No audio captured") {
+      clearRecordStopButtonState(ctx, backgroundTick);
+      ctx.uiRuntime->showToast("Voice", "Recording canceled", 1100, backgroundTick);
+      return true;
+    }
+
     ctx.uiRuntime->showToast("BLE",
                       recordErr.isEmpty() ? String("BLE recording failed")
                                           : recordErr,
                       1800,
                       backgroundTick);
+    if (stoppedByButton) {
+      clearRecordStopButtonState(ctx, backgroundTick);
+    }
     return true;
+  }
+
+  if (stoppedByButton) {
+    clearRecordStopButtonState(ctx, backgroundTick);
   }
 
   if (bytesWritten > kMaxVoiceBytes) {
@@ -943,9 +1015,8 @@ std::vector<String> buildMessengerPreviewLines(const std::vector<ChatEntry> &ent
     return lines;
   }
 
-  const int total = static_cast<int>(entries.size());
-  const int start = total > 3 ? total - 3 : 0;
-  for (int i = start; i < total; ++i) {
+  lines.reserve(entries.size());
+  for (size_t i = 0; i < entries.size(); ++i) {
     lines.push_back(makeChatPreview(entries[static_cast<size_t>(i)]));
   }
   return lines;
