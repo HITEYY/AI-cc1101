@@ -9,6 +9,7 @@
 #endif
 
 #include "user_config.h"
+#include "board_pins.h"
 
 namespace {
 
@@ -175,6 +176,13 @@ bool capturePdmSamples(File &file,
     *dataBytesWritten = 0;
   }
 
+  const auto shutdownI2s = []() {
+    i2s_driver_uninstall(I2S_NUM_0);
+    // Keep UI button pins in pull-up input mode after I2S teardown.
+    pinMode(boardpins::kEncoderOk, INPUT_PULLUP);
+    pinMode(boardpins::kEncoderBack, INPUT_PULLUP);
+  };
+
   i2s_config_t config = {};
   config.mode = static_cast<i2s_mode_t>(I2S_MODE_MASTER | I2S_MODE_RX | I2S_MODE_PDM);
   config.sample_rate = static_cast<int>(sampleRate);
@@ -191,12 +199,15 @@ bool capturePdmSamples(File &file,
   }
 
   i2s_pin_config_t pins = {};
+#if defined(CONFIG_IDF_TARGET_ESP32S3) || defined(CONFIG_IDF_TARGET_ESP32)
+  pins.mck_io_num = I2S_PIN_NO_CHANGE;
+#endif
   pins.bck_io_num = USER_MIC_PDM_CLK_PIN;
   pins.ws_io_num = USER_MIC_PDM_CLK_PIN;
   pins.data_out_num = I2S_PIN_NO_CHANGE;
   pins.data_in_num = USER_MIC_PDM_DATA_PIN;
   if (i2s_set_pin(I2S_NUM_0, &pins) != ESP_OK) {
-    i2s_driver_uninstall(I2S_NUM_0);
+    shutdownI2s();
     setError(error, "MIC I2S pin config failed");
     return false;
   }
@@ -217,14 +228,14 @@ bool capturePdmSamples(File &file,
     const esp_err_t readErr =
         i2s_read(I2S_NUM_0, chunk, toRead, &readBytes, pdMS_TO_TICKS(80));
     if (readErr != ESP_OK) {
-      i2s_driver_uninstall(I2S_NUM_0);
+      shutdownI2s();
       setError(error, "MIC I2S read failed");
       return false;
     }
     if (readBytes == 0) {
       ++emptyReads;
       if (emptyReads > 20) {
-        i2s_driver_uninstall(I2S_NUM_0);
+        shutdownI2s();
         setError(error, "MIC I2S timeout");
         return false;
       }
@@ -236,7 +247,7 @@ bool capturePdmSamples(File &file,
 
     emptyReads = 0;
     if (file.write(chunk, readBytes) != readBytes) {
-      i2s_driver_uninstall(I2S_NUM_0);
+      shutdownI2s();
       setError(error, "Failed to write voice sample");
       return false;
     }
@@ -247,7 +258,7 @@ bool capturePdmSamples(File &file,
     }
   }
 
-  i2s_driver_uninstall(I2S_NUM_0);
+  shutdownI2s();
   if (dataBytesWritten) {
     *dataBytesWritten = written;
   }

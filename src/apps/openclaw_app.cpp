@@ -26,6 +26,13 @@ constexpr const char *kMessageSenderId = "node-host";
 constexpr const char *kDefaultAgentFallback = "default";
 constexpr const char *kDefaultSessionAgentId = "main";
 constexpr const char *kDefaultSessionKey = "agent:main:main";
+constexpr const char *kSessionResetPrompt =
+    "A new session was started via /new or /reset. Greet the user in your configured persona, "
+    "if one is provided. Be yourself - use your defined voice, mannerisms, and mood. Keep it "
+    "to 1-3 sentences and ask what they want to do. If the runtime model differs from "
+    "default_model in the system prompt, mention the default model. Do not mention internal "
+    "steps, files, tools, or reasoning.";
+constexpr unsigned long kSessionResetWaitMs = 17000UL;
 constexpr size_t kMessageChunkBytes = 960;
 constexpr uint32_t kMaxVoiceBytes = 2097152;
 constexpr uint32_t kMaxFileBytes = 4194304;
@@ -42,6 +49,10 @@ struct ChatEntry {
   GatewayInboxMessage message;
   bool outgoing = false;
 };
+
+bool sendTextPayload(AppContext &ctx,
+                     const String &rawText,
+                     const std::function<void()> &backgroundTick);
 
 String boolLabel(bool value) {
   return value ? "Yes" : "No";
@@ -318,35 +329,33 @@ bool ensureSdMountedForVoice(String *error = nullptr) {
   return mounted;
 }
 
-bool isRecordStopButtonPressed() {
-  return digitalRead(boardpins::kEncoderOk) == LOW ||
-         digitalRead(boardpins::kEncoderBack) == LOW;
-}
-
-void clearRecordStopButtonState(AppContext &ctx,
-                                const std::function<void()> &backgroundTick) {
-  const unsigned long startMs = millis();
-  while (isRecordStopButtonPressed()) {
-    if (backgroundTick) {
-      backgroundTick();
-    }
-    if (millis() - startMs > 1500UL) {
-      break;
-    }
-    delay(4);
+bool askVoiceRecordSeconds(AppContext &ctx,
+                           const std::function<void()> &backgroundTick,
+                           uint16_t *secondsOut) {
+  if (!secondsOut) {
+    return false;
   }
 
-  // Let input processing observe the release edge at least once.
-  const unsigned long settleStartMs = millis();
-  while (millis() - settleStartMs < 30UL) {
-    if (backgroundTick) {
-      backgroundTick();
-    }
-    delay(2);
+  const int maxSeconds = static_cast<int>(
+      std::max<uint32_t>(1U, static_cast<uint32_t>(USER_MIC_MAX_SECONDS)));
+  int seconds = static_cast<int>(
+      std::max<uint32_t>(1U, static_cast<uint32_t>(USER_MIC_DEFAULT_SECONDS)));
+  if (seconds > maxSeconds) {
+    seconds = maxSeconds;
   }
 
-  // Recording stop can leave stale button/key events in queue; fully resync input.
-  ctx.uiRuntime->resetInputState();
+  if (!ctx.uiRuntime->numberWheelInput("Record Seconds",
+                                       1,
+                                       maxSeconds,
+                                       1,
+                                       seconds,
+                                       backgroundTick,
+                                       "s")) {
+    return false;
+  }
+
+  *secondsOut = static_cast<uint16_t>(seconds);
+  return true;
 }
 
 bool ensureGatewayReady(AppContext &ctx,
@@ -359,6 +368,89 @@ bool ensureGatewayReady(AppContext &ctx,
     return false;
   }
   return true;
+}
+
+bool waitGatewayResponse(AppContext &ctx,
+                         const String &requestId,
+                         unsigned long timeoutMs,
+                         const std::function<void()> &backgroundTick,
+                         bool *okOut = nullptr,
+                         String *errorOut = nullptr) {
+  if (requestId.isEmpty()) {
+    return false;
+  }
+
+  const unsigned long startedAt = millis();
+  while (millis() - startedAt < timeoutMs) {
+    bool ok = false;
+    String error;
+    if (ctx.gateway->takeResponse(requestId, &ok, &error)) {
+      if (okOut) {
+        *okOut = ok;
+      }
+      if (errorOut) {
+        *errorOut = error;
+      }
+      return true;
+    }
+
+    backgroundTick();
+    delay(20);
+  }
+
+  return false;
+}
+
+bool resetMainMessengerSession(AppContext &ctx,
+                               const std::function<void()> &backgroundTick) {
+  if (!ensureGatewayReady(ctx, backgroundTick)) {
+    return false;
+  }
+
+  const String sessionKey = buildMainMessengerSessionKey();
+  DynamicJsonDocument params(256);
+  params["key"] = sessionKey;
+  params["reason"] = "new";
+
+  String requestId;
+  if (!ctx.gateway->sendGatewayRequest("sessions.reset", params, &requestId)) {
+    ctx.uiRuntime->showToast("Messenger", "Session reset send failed", 1700, backgroundTick);
+    return false;
+  }
+
+  bool resetOk = false;
+  String resetError;
+  if (!waitGatewayResponse(ctx,
+                           requestId,
+                           kSessionResetWaitMs,
+                           backgroundTick,
+                           &resetOk,
+                           &resetError)) {
+    ctx.uiRuntime->showToast("Messenger", "Session reset timeout", 1700, backgroundTick);
+    return false;
+  }
+
+  if (!resetOk) {
+    if (resetError.isEmpty()) {
+      resetError = "Session reset rejected";
+    }
+    ctx.uiRuntime->showToast("Messenger", trimMiddle(resetError, 42), 2000, backgroundTick);
+    return false;
+  }
+
+  gMessengerSessionKey = sessionKey;
+  gSubscribedSessionKey = "";
+  gSubscribedConnectOkMs = 0;
+  clearMessengerMessages(ctx);
+  return true;
+}
+
+void startMainSessionWithGreeting(AppContext &ctx,
+                                  const std::function<void()> &backgroundTick) {
+  if (!resetMainMessengerSession(ctx, backgroundTick)) {
+    return;
+  }
+  sendTextPayload(ctx, kSessionResetPrompt, backgroundTick);
 }
 
 bool sendTextPayload(AppContext &ctx,
@@ -592,8 +684,10 @@ void recordVoiceFromMic(AppContext &ctx,
     return;
   }
 
-  const uint16_t maxSeconds = static_cast<uint16_t>(
-      std::max<uint32_t>(1U, static_cast<uint32_t>(USER_MIC_MAX_SECONDS)));
+  uint16_t recordSeconds = 0;
+  if (!askVoiceRecordSeconds(ctx, backgroundTick, &recordSeconds)) {
+    return;
+  }
 
   String caption;
   if (!ctx.uiRuntime->textInput("Caption(optional)", caption, false, backgroundTick)) {
@@ -614,52 +708,25 @@ void recordVoiceFromMic(AppContext &ctx,
   voicePath += String(static_cast<unsigned long>(millis()));
   voicePath += ".wav";
 
-  ctx.uiRuntime->showToast("Voice", "Recording... OK/BACK to stop", 900, backgroundTick);
+  String recordingMsg = "Recording ";
+  recordingMsg += String(static_cast<unsigned long>(recordSeconds));
+  recordingMsg += "s...";
+  ctx.uiRuntime->showToast("Voice", recordingMsg, 900, backgroundTick);
 
   String recordErr;
   uint32_t bytesWritten = 0;
-  bool stoppedByButton = false;
-  bool stopArmed = false;
-  const unsigned long recordStartMs = millis();
-  const auto stopRequested = [&]() {
-    const unsigned long elapsedMs = millis() - recordStartMs;
-    if (!stopArmed) {
-      if (!isRecordStopButtonPressed() && elapsedMs >= 120UL) {
-        stopArmed = true;
-      }
-      return false;
-    }
-    if (isRecordStopButtonPressed()) {
-      stoppedByButton = true;
-      return true;
-    }
-    return false;
-  };
   if (!recordMicWavToSd(voicePath,
-                        maxSeconds,
+                        recordSeconds,
                         backgroundTick,
-                        stopRequested,
+                        std::function<bool()>(),
                         &recordErr,
                         &bytesWritten)) {
-    if (stoppedByButton && recordErr == "No audio captured") {
-      clearRecordStopButtonState(ctx, backgroundTick);
-      ctx.uiRuntime->showToast("Voice", "Recording canceled", 1100, backgroundTick);
-      return;
-    }
-
     ctx.uiRuntime->showToast("Voice",
                       recordErr.isEmpty() ? String("MIC recording failed")
                                           : recordErr,
                       1800,
                       backgroundTick);
-    if (stoppedByButton) {
-      clearRecordStopButtonState(ctx, backgroundTick);
-    }
     return;
-  }
-
-  if (stoppedByButton) {
-    clearRecordStopButtonState(ctx, backgroundTick);
   }
 
   if (bytesWritten > kMaxVoiceBytes) {
@@ -694,8 +761,10 @@ bool recordVoiceFromBle(AppContext &ctx,
     return true;
   }
 
-  const uint16_t maxSeconds = static_cast<uint16_t>(
-      std::max<uint32_t>(1U, static_cast<uint32_t>(USER_MIC_MAX_SECONDS)));
+  uint16_t recordSeconds = 0;
+  if (!askVoiceRecordSeconds(ctx, backgroundTick, &recordSeconds)) {
+    return true;
+  }
 
   String caption;
   if (!ctx.uiRuntime->textInput("Caption(optional)", caption, false, backgroundTick)) {
@@ -716,52 +785,25 @@ bool recordVoiceFromBle(AppContext &ctx,
   voicePath += String(static_cast<unsigned long>(millis()));
   voicePath += ".wav";
 
-  ctx.uiRuntime->showToast("BLE", "Recording... OK/BACK to stop", 900, backgroundTick);
+  String recordingMsg = "Recording ";
+  recordingMsg += String(static_cast<unsigned long>(recordSeconds));
+  recordingMsg += "s...";
+  ctx.uiRuntime->showToast("BLE", recordingMsg, 900, backgroundTick);
 
   String recordErr;
   uint32_t bytesWritten = 0;
-  bool stoppedByButton = false;
-  bool stopArmed = false;
-  const unsigned long recordStartMs = millis();
-  const auto stopRequested = [&]() {
-    const unsigned long elapsedMs = millis() - recordStartMs;
-    if (!stopArmed) {
-      if (!isRecordStopButtonPressed() && elapsedMs >= 120UL) {
-        stopArmed = true;
-      }
-      return false;
-    }
-    if (isRecordStopButtonPressed()) {
-      stoppedByButton = true;
-      return true;
-    }
-    return false;
-  };
   if (!ctx.ble->recordAudioStreamWavToSd(voicePath,
-                                         maxSeconds,
+                                         recordSeconds,
                                          backgroundTick,
-                                         stopRequested,
+                                         std::function<bool()>(),
                                          &recordErr,
                                          &bytesWritten)) {
-    if (stoppedByButton && recordErr == "No audio captured") {
-      clearRecordStopButtonState(ctx, backgroundTick);
-      ctx.uiRuntime->showToast("Voice", "Recording canceled", 1100, backgroundTick);
-      return true;
-    }
-
     ctx.uiRuntime->showToast("BLE",
                       recordErr.isEmpty() ? String("BLE recording failed")
                                           : recordErr,
                       1800,
                       backgroundTick);
-    if (stoppedByButton) {
-      clearRecordStopButtonState(ctx, backgroundTick);
-    }
     return true;
-  }
-
-  if (stoppedByButton) {
-    clearRecordStopButtonState(ctx, backgroundTick);
   }
 
   if (bytesWritten > kMaxVoiceBytes) {
@@ -962,7 +1004,7 @@ String makeChatPreview(const ChatEntry &entry) {
     body = "(no text)";
   }
 
-  String label = entry.outgoing ? "Me " : "Agent ";
+  String label = entry.outgoing ? "Me: " : "Agent: ";
   label += body;
   return label;
 }
@@ -1055,11 +1097,11 @@ void runMessagingMenu(AppContext &ctx,
     if (action == MessengerAction::TextLong) {
       selected = 0;
       if (ctx.uiRuntime->confirm("New Session",
-                                 "/new command send?",
+                                 "Reset session and send greeting?",
                                  backgroundTick,
-                                 "Send",
+                                 "Run",
                                  "Cancel")) {
-        sendTextPayload(ctx, "/new", backgroundTick);
+        startMainSessionWithGreeting(ctx, backgroundTick);
       }
       continue;
     }
