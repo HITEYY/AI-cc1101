@@ -477,6 +477,12 @@ void GatewayClient::handleGatewayFrame(const char *text, size_t len) {
   filterPayload["paramsJSON"] = true;
   filterPayload["messageId"] = true;
   filterPayload["msgId"] = true;
+  filterPayload["runId"] = true;
+  filterPayload["sessionKey"] = true;
+  filterPayload["state"] = true;
+  filterPayload["errorMessage"] = true;
+  filterPayload["stopReason"] = true;
+  filterPayload["seq"] = true;
   filterPayload["type"] = true;
   filterPayload["kind"] = true;
   filterPayload["from"] = true;
@@ -868,9 +874,11 @@ uint64_t GatewayClient::currentUnixMs() const {
 }
 
 bool GatewayClient::captureMessageEvent(const String &eventName, JsonObjectConst payload) {
+  const bool isChatEvent = eventName == "chat";
   const bool isMessageEvent = eventName.startsWith("msg.") ||
                               eventName.startsWith("message.") ||
-                              eventName.startsWith("chat.");
+                              eventName.startsWith("chat.") ||
+                              isChatEvent;
   if (!isMessageEvent) {
     return false;
   }
@@ -882,7 +890,10 @@ bool GatewayClient::captureMessageEvent(const String &eventName, JsonObjectConst
 
   GatewayInboxMessage message;
   message.event = eventName;
-  message.id = readMessageString(payload, "id", "messageId", "msgId");
+  message.id = readMessageString(payload, "runId", "id", "messageId");
+  if (message.id.isEmpty()) {
+    message.id = readMessageString(payload, "msgId");
+  }
   if (message.id.isEmpty()) {
     message.id = nextReqId("in");
   }
@@ -897,6 +908,47 @@ bool GatewayClient::captureMessageEvent(const String &eventName, JsonObjectConst
   message.text = readMessageString(payload, "text", "message", "body");
   message.fileName = readMessageString(payload, "fileName", "name", "file");
   message.contentType = readMessageString(payload, "contentType", "mime", "mimeType");
+
+  if (isChatEvent) {
+    if (message.from.isEmpty()) {
+      message.from = "assistant";
+    }
+    if (message.to.isEmpty()) {
+      message.to = readMessageString(payload, "sessionKey");
+    }
+
+    if (message.text.isEmpty() && payload["message"].is<JsonObjectConst>()) {
+      const JsonObjectConst messageObject = payload["message"].as<JsonObjectConst>();
+      if (messageObject["content"].is<JsonArrayConst>()) {
+        const JsonArrayConst content = messageObject["content"].as<JsonArrayConst>();
+        for (JsonVariantConst item : content) {
+          if (!item.is<JsonObjectConst>()) {
+            continue;
+          }
+          const JsonObjectConst block = item.as<JsonObjectConst>();
+          const char *blockType = block["type"] | "";
+          if (strcmp(blockType, "text") != 0) {
+            continue;
+          }
+          const char *blockText = block["text"] | "";
+          if (blockText && blockText[0] != '\0') {
+            message.text = String(blockText);
+            break;
+          }
+        }
+      }
+    }
+
+    if (message.text.isEmpty()) {
+      const String state = readMessageString(payload, "state");
+      const String errorMessage = readMessageString(payload, "errorMessage");
+      if (!errorMessage.isEmpty()) {
+        message.text = "[error] " + errorMessage;
+      } else if (state == "aborted") {
+        message.text = "(aborted)";
+      }
+    }
+  }
 
   auto readUInt32 = [&](const char *key) -> uint32_t {
     if (!key || !payload.containsKey(key)) {
@@ -957,6 +1009,16 @@ bool GatewayClient::captureMessageEvent(const String &eventName, JsonObjectConst
 void GatewayClient::pushInboxMessage(const GatewayInboxMessage &message) {
   if (kInboxCapacity == 0) {
     return;
+  }
+
+  if (!message.id.isEmpty()) {
+    for (size_t i = 0; i < inboxCount_; ++i) {
+      const size_t existingPos = (inboxStart_ + i) % kInboxCapacity;
+      if (inbox_[existingPos].id == message.id) {
+        inbox_[existingPos] = message;
+        return;
+      }
+    }
   }
 
   size_t pos = 0;

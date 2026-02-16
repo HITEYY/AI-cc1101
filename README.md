@@ -31,7 +31,9 @@ LilyGo T-Embed CC1101 보드를 OpenClaw Remote Gateway에 `node`로 연결하�
 - `cc1101.packet_rx_once`
 - CC1101 packet mode 설정/송수신/RSSI 측정
 - Messaging event 송신/수신
-  - 텍스트: `msg.text`
+  - 텍스트 요청: `agent.request` (`node.event`)
+  - 채팅 세션 구독: `chat.subscribe` / `chat.unsubscribe` (`node.event`)
+  - 채팅 스트림 수신: `chat` (delta/final/error)
   - 파일 메타: `msg.file.meta`
   - 파일 청크: `msg.file.chunk`
   - 음성 메타: `msg.voice.meta`
@@ -189,6 +191,7 @@ git push origin v1.0.0
 
 4. `OpenClaw -> Messenger`
 - `Write Message`: 텍스트 메시지 전송
+  - 내부적으로 `agent.request` + `chat.subscribe`를 사용해 Agent 실시간 응답 수신
 - `Send File (SD)`: SD 일반 파일 전송(최대 4MB)
 - `Record Voice (MIC/BLE)`: 음성 소스 선택
   - `MIC (Device)`: 장치 MIC(ADC)에서 직접 녹음 후 즉시 전송

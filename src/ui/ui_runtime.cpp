@@ -1204,20 +1204,14 @@ class UiRuntime::Impl {
     for (size_t i = 0; i < lineCount; ++i) {
       lv_obj_t *line = lv_label_create(box);
       setSingleLineLabel(line, boxW - 12, LV_TEXT_ALIGN_LEFT);
-      size_t maxChars = 6;
-      if (boxW > 20) {
-        maxChars = static_cast<size_t>((boxW - 14) / 7);
-        if (maxChars < 6) {
-          maxChars = 6;
-        }
-      }
+      lv_label_set_long_mode(line, LV_LABEL_LONG_SCROLL_CIRC);
       String lineText;
       if (previewLines.empty()) {
         lineText = "(no messages)";
       } else {
         lineText = previewLines[i];
       }
-      lv_label_set_text(line, ellipsize(lineText, maxChars).c_str());
+      lv_label_set_text(line, lineText.c_str());
       lv_obj_set_style_text_color(line, lv_color_hex(kClrTextPrimary), 0);
       lv_obj_set_pos(line, 6, textStartY + static_cast<int>(i) * (lineHeight + lineGap));
     }

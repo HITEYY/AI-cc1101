@@ -24,6 +24,8 @@ namespace {
 
 constexpr const char *kMessageSenderId = "node-host";
 constexpr const char *kDefaultAgentFallback = "default";
+constexpr const char *kDefaultSessionAgentId = "main";
+constexpr const char *kDefaultSessionMainKey = "main";
 constexpr size_t kMessageChunkBytes = 960;
 constexpr uint32_t kMaxVoiceBytes = 2097152;
 constexpr uint32_t kMaxFileBytes = 4194304;
@@ -32,6 +34,9 @@ constexpr size_t kOutboxCapacity = 40;
 GatewayInboxMessage gOutbox[kOutboxCapacity];
 size_t gOutboxStart = 0;
 size_t gOutboxCount = 0;
+String gMessengerSessionKey;
+String gSubscribedSessionKey;
+unsigned long gSubscribedConnectOkMs = 0;
 
 struct ChatEntry {
   GatewayInboxMessage message;
@@ -53,6 +58,29 @@ String defaultAgentId() {
     id = kDefaultAgentFallback;
   }
   return id;
+}
+
+String buildMainMessengerSessionKey() {
+  String key = "agent:";
+  key += kDefaultSessionAgentId;
+  key += ":";
+  key += kDefaultSessionMainKey;
+  return key;
+}
+
+String buildNewMessengerSessionKey() {
+  String key = "agent:";
+  key += kDefaultSessionAgentId;
+  key += ":oc-";
+  key += String(static_cast<unsigned long>(millis()));
+  return key;
+}
+
+String activeMessengerSessionKey() {
+  if (gMessengerSessionKey.isEmpty()) {
+    gMessengerSessionKey = buildMainMessengerSessionKey();
+  }
+  return gMessengerSessionKey;
 }
 
 void pushOutbox(const GatewayInboxMessage &message) {
@@ -88,6 +116,50 @@ void clearOutbox() {
 void clearMessengerMessages(AppContext &ctx) {
   ctx.gateway->clearInbox();
   clearOutbox();
+}
+
+bool sendChatSessionEvent(AppContext &ctx,
+                          const char *eventName,
+                          const String &sessionKey) {
+  if (!eventName || sessionKey.isEmpty()) {
+    return false;
+  }
+  DynamicJsonDocument payload(256);
+  payload["sessionKey"] = sessionKey;
+  return ctx.gateway->sendNodeEvent(eventName, payload);
+}
+
+bool ensureMessengerSessionSubscription(AppContext &ctx,
+                                        const std::function<void()> &backgroundTick,
+                                        bool showErrorToast = true) {
+  const GatewayStatus status = ctx.gateway->status();
+  if (!status.gatewayReady) {
+    gSubscribedSessionKey = "";
+    gSubscribedConnectOkMs = 0;
+    return false;
+  }
+
+  const String sessionKey = activeMessengerSessionKey();
+  const bool alreadySubscribed = gSubscribedSessionKey == sessionKey &&
+                                 gSubscribedConnectOkMs == status.lastConnectOkMs;
+  if (alreadySubscribed) {
+    return true;
+  }
+
+  if (!gSubscribedSessionKey.isEmpty()) {
+    sendChatSessionEvent(ctx, "chat.unsubscribe", gSubscribedSessionKey);
+  }
+
+  if (!sendChatSessionEvent(ctx, "chat.subscribe", sessionKey)) {
+    if (showErrorToast) {
+      ctx.uiRuntime->showToast("Messenger", "Chat subscribe failed", 1500, backgroundTick);
+    }
+    return false;
+  }
+
+  gSubscribedSessionKey = sessionKey;
+  gSubscribedConnectOkMs = status.lastConnectOkMs;
+  return true;
 }
 
 String trimMiddle(const String &value, size_t maxLength) {
@@ -262,6 +334,8 @@ bool ensureGatewayReady(AppContext &ctx,
                         const std::function<void()> &backgroundTick) {
   const GatewayStatus status = ctx.gateway->status();
   if (!status.gatewayReady) {
+    gSubscribedSessionKey = "";
+    gSubscribedConnectOkMs = 0;
     ctx.uiRuntime->showToast("Messenger", "Gateway is not ready", 1500, backgroundTick);
     return false;
   }
@@ -282,27 +356,26 @@ bool sendTextPayload(AppContext &ctx,
     return false;
   }
 
-  DynamicJsonDocument payload(2048);
-  const String messageId = makeMessageId("txt");
-  const String target = defaultAgentId();
-  payload["id"] = messageId;
-  payload["from"] = kMessageSenderId;
-  payload["to"] = target;
-  payload["type"] = "text";
-  payload["text"] = text;
-  const uint64_t ts = currentUnixMs();
-  if (ts > 0) {
-    payload["ts"] = ts;
+  if (!ensureMessengerSessionSubscription(ctx, backgroundTick)) {
+    return false;
   }
 
-  if (!ctx.gateway->sendNodeEvent("msg.text", payload)) {
+  DynamicJsonDocument payload(2048);
+  const String messageId = makeMessageId("txt");
+  const String target = kDefaultSessionAgentId;
+  payload["message"] = text;
+  payload["sessionKey"] = activeMessengerSessionKey();
+  payload["deliver"] = false;
+  const uint64_t ts = currentUnixMs();
+
+  if (!ctx.gateway->sendNodeEvent("agent.request", payload)) {
     ctx.uiRuntime->showToast("Messenger", "Text send failed", 1500, backgroundTick);
     return false;
   }
 
   GatewayInboxMessage sent;
   sent.id = messageId;
-  sent.event = "msg.text";
+  sent.event = "agent.request";
   sent.type = "text";
   sent.from = kMessageSenderId;
   sent.to = target;
@@ -811,9 +884,7 @@ String makeChatPreview(const ChatEntry &entry) {
   }
 
   String label = entry.outgoing ? "Me " : "Agent ";
-  label += formatTsShort(message.tsMs);
-  label += " ";
-  label += trimMiddle(body, 20);
+  label += body;
   return label;
 }
 
@@ -876,7 +947,7 @@ std::vector<String> buildMessengerPreviewLines(const std::vector<ChatEntry> &ent
 
   const int total = static_cast<int>(entries.size());
   for (int i = total - 1; i >= 0 && static_cast<int>(lines.size()) < 3; --i) {
-    lines.push_back(trimMiddle(makeChatPreview(entries[static_cast<size_t>(i)]), 14));
+    lines.push_back(makeChatPreview(entries[static_cast<size_t>(i)]));
   }
   return lines;
 }
@@ -886,6 +957,8 @@ void runMessagingMenu(AppContext &ctx,
   int selected = 0;
 
   while (true) {
+    ensureMessengerSessionSubscription(ctx, backgroundTick, false);
+
     std::vector<ChatEntry> entries = collectChatEntries(ctx);
     std::vector<String> previewLines = buildMessengerPreviewLines(entries);
     const MessengerAction action = ctx.uiRuntime->messengerHomeLoop(previewLines,
@@ -903,6 +976,13 @@ void runMessagingMenu(AppContext &ctx,
                                  backgroundTick,
                                  "Send",
                                  "Cancel")) {
+        const String previousSessionKey = activeMessengerSessionKey();
+        gMessengerSessionKey = buildNewMessengerSessionKey();
+        if (!ensureMessengerSessionSubscription(ctx, backgroundTick)) {
+          gMessengerSessionKey = previousSessionKey;
+          ensureMessengerSessionSubscription(ctx, backgroundTick, false);
+          continue;
+        }
         if (sendTextPayload(ctx, "/new", backgroundTick)) {
           clearMessengerMessages(ctx);
           ctx.uiRuntime->showToast("Messenger", "Session reset", 1200, backgroundTick);
