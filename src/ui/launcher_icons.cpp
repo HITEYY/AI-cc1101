@@ -1,270 +1,273 @@
 #include "launcher_icons.h"
 
-#include <string.h>
-
 namespace {
 
+constexpr int kDesignSize = 46;
+constexpr int kMainRenderSize = 69;
+constexpr int kSideRenderSize = 36;
 constexpr int kIconCount = 4;
-constexpr int kMainW = 46;
-constexpr int kMainH = 46;
-constexpr int kSideW = 24;
-constexpr int kSideH = 24;
 
-uint8_t gMainData[kIconCount][kMainW * kMainH];
-uint8_t gSideData[kIconCount][kSideW * kSideH];
-lv_image_dsc_t gMainDsc[kIconCount];
-lv_image_dsc_t gSideDsc[kIconCount];
 bool gInitialized = false;
 
-inline void clear(uint8_t *buf, int len) {
-  memset(buf, 0, static_cast<size_t>(len));
+constexpr LauncherIconId kIconUserData[kIconCount] = {
+    LauncherIconId::AppMarket,
+    LauncherIconId::Settings,
+    LauncherIconId::FileExplorer,
+    LauncherIconId::OpenClaw,
+};
+
+struct DrawCtx {
+  lv_layer_t *layer;
+  lv_area_t area;
+  lv_color_t color;
+  int32_t w;
+  int32_t h;
+  int32_t minSide;
+};
+
+int32_t scaleX(const DrawCtx &ctx, int32_t x) {
+  return ctx.area.x1 + ((x * ctx.w) + (kDesignSize / 2)) / kDesignSize;
 }
 
-inline void put(uint8_t *buf, int w, int h, int x, int y, uint8_t v = 255) {
-  if (x < 0 || y < 0 || x >= w || y >= h) {
-    return;
-  }
-  buf[y * w + x] = v;
+int32_t scaleY(const DrawCtx &ctx, int32_t y) {
+  return ctx.area.y1 + ((y * ctx.h) + (kDesignSize / 2)) / kDesignSize;
 }
 
-void fillRect(uint8_t *buf, int w, int h, int x, int y, int rw, int rh, uint8_t v = 255) {
-  for (int yy = y; yy < y + rh; ++yy) {
-    for (int xx = x; xx < x + rw; ++xx) {
-      put(buf, w, h, xx, yy, v);
-    }
+int32_t scaleLen(const DrawCtx &ctx, int32_t len) {
+  int32_t out = ((len * ctx.minSide) + (kDesignSize / 2)) / kDesignSize;
+  if (out < 1) {
+    out = 1;
   }
+  return out;
 }
 
-void drawRect(uint8_t *buf, int w, int h, int x, int y, int rw, int rh, int t = 1) {
-  for (int i = 0; i < t; ++i) {
-    fillRect(buf, w, h, x + i, y + i, rw - (i * 2), 1);
-    fillRect(buf, w, h, x + i, y + rh - 1 - i, rw - (i * 2), 1);
-    fillRect(buf, w, h, x + i, y + i, 1, rh - (i * 2));
-    fillRect(buf, w, h, x + rw - 1 - i, y + i, 1, rh - (i * 2));
+lv_area_t makeRect(const DrawCtx &ctx, int32_t x, int32_t y, int32_t rw, int32_t rh) {
+  lv_area_t area;
+  area.x1 = ctx.area.x1 + (x * ctx.w) / kDesignSize;
+  area.y1 = ctx.area.y1 + (y * ctx.h) / kDesignSize;
+  area.x2 = ctx.area.x1 + ((x + rw) * ctx.w) / kDesignSize - 1;
+  area.y2 = ctx.area.y1 + ((y + rh) * ctx.h) / kDesignSize - 1;
+
+  if (area.x2 < area.x1) {
+    area.x2 = area.x1;
   }
+  if (area.y2 < area.y1) {
+    area.y2 = area.y1;
+  }
+  return area;
 }
 
-void drawLine(uint8_t *buf, int w, int h, int x0, int y0, int x1, int y1, int t = 1) {
-  int dx = abs(x1 - x0);
-  int sx = x0 < x1 ? 1 : -1;
-  int dy = -abs(y1 - y0);
-  int sy = y0 < y1 ? 1 : -1;
-  int err = dx + dy;
+void drawFilledRect(const DrawCtx &ctx, int32_t x, int32_t y, int32_t rw, int32_t rh) {
+  lv_draw_fill_dsc_t fill;
+  lv_draw_fill_dsc_init(&fill);
+  fill.base.layer = ctx.layer;
+  fill.radius = 0;
+  fill.opa = LV_OPA_COVER;
+  fill.color = ctx.color;
 
-  while (true) {
-    const int hs = t / 2;
-    for (int yy = y0 - hs; yy <= y0 + hs; ++yy) {
-      for (int xx = x0 - hs; xx <= x0 + hs; ++xx) {
-        put(buf, w, h, xx, yy);
-      }
-    }
-    if (x0 == x1 && y0 == y1) {
-      break;
-    }
-    const int e2 = 2 * err;
-    if (e2 >= dy) {
-      err += dy;
-      x0 += sx;
-    }
-    if (e2 <= dx) {
-      err += dx;
-      y0 += sy;
-    }
-  }
+  const lv_area_t area = makeRect(ctx, x, y, rw, rh);
+  lv_draw_fill(ctx.layer, &fill, &area);
 }
 
-void drawCircle(uint8_t *buf, int w, int h, int cx, int cy, int r, int t = 1, uint8_t v = 255) {
-  if (r <= 0) {
-    return;
-  }
+void drawRectBorder(const DrawCtx &ctx, int32_t x, int32_t y, int32_t rw, int32_t rh, int32_t t) {
+  lv_draw_border_dsc_t border;
+  lv_draw_border_dsc_init(&border);
+  border.base.layer = ctx.layer;
+  border.radius = 0;
+  border.opa = LV_OPA_COVER;
+  border.color = ctx.color;
+  border.width = scaleLen(ctx, t);
+  border.side = LV_BORDER_SIDE_FULL;
 
-  for (int rr = r; rr > r - t; --rr) {
-    int x = rr;
-    int y = 0;
-    int err = 0;
-    while (x >= y) {
-      put(buf, w, h, cx + x, cy + y, v);
-      put(buf, w, h, cx + y, cy + x, v);
-      put(buf, w, h, cx - y, cy + x, v);
-      put(buf, w, h, cx - x, cy + y, v);
-      put(buf, w, h, cx - x, cy - y, v);
-      put(buf, w, h, cx - y, cy - x, v);
-      put(buf, w, h, cx + y, cy - x, v);
-      put(buf, w, h, cx + x, cy - y, v);
-      ++y;
-      if (err <= 0) {
-        err += 2 * y + 1;
-      } else {
-        --x;
-        err += 2 * (y - x) + 1;
-      }
-    }
-  }
+  const lv_area_t area = makeRect(ctx, x, y, rw, rh);
+  lv_draw_border(ctx.layer, &border, &area);
 }
 
-void fillCircle(uint8_t *buf, int w, int h, int cx, int cy, int r, uint8_t v = 255) {
-  if (r <= 0) {
-    return;
-  }
+void drawLineSegment(const DrawCtx &ctx,
+                     int32_t x0,
+                     int32_t y0,
+                     int32_t x1,
+                     int32_t y1,
+                     int32_t t) {
+  lv_draw_line_dsc_t line;
+  lv_draw_line_dsc_init(&line);
+  line.base.layer = ctx.layer;
+  line.color = ctx.color;
+  line.opa = LV_OPA_COVER;
+  line.width = scaleLen(ctx, t);
+  line.round_start = 1;
+  line.round_end = 1;
+  line.p1.x = scaleX(ctx, x0);
+  line.p1.y = scaleY(ctx, y0);
+  line.p2.x = scaleX(ctx, x1);
+  line.p2.y = scaleY(ctx, y1);
 
-  const int rr = r * r;
-  for (int y = -r; y <= r; ++y) {
-    for (int x = -r; x <= r; ++x) {
-      if ((x * x) + (y * y) <= rr) {
-        put(buf, w, h, cx + x, cy + y, v);
-      }
-    }
-  }
+  lv_draw_line(ctx.layer, &line);
 }
 
-void drawAppMarketIcon(uint8_t *buf, int w, int h) {
-  clear(buf, w * h);
+void drawCircleOutline(const DrawCtx &ctx, int32_t cx, int32_t cy, int32_t r, int32_t t) {
+  lv_draw_arc_dsc_t arc;
+  lv_draw_arc_dsc_init(&arc);
+  arc.base.layer = ctx.layer;
+  arc.color = ctx.color;
+  arc.opa = LV_OPA_COVER;
+  arc.width = scaleLen(ctx, t);
+  arc.center.x = scaleX(ctx, cx);
+  arc.center.y = scaleY(ctx, cy);
+  arc.radius = static_cast<uint16_t>(scaleLen(ctx, r));
+  arc.start_angle = 0;
+  arc.end_angle = 359;
+  arc.rounded = 0;
 
-  const int cx = w / 2;
-  const int boxW = (w * 24) / 46;
-  const int boxH = (h * 13) / 46;
-  const int boxX = cx - (boxW / 2);
-  const int boxY = (h * 22) / 46;
+  lv_draw_arc(ctx.layer, &arc);
+}
 
-  drawRect(buf, w, h, boxX, boxY, boxW, boxH, 2);
-  drawRect(buf, w, h, boxX + 3, boxY - 5, boxW - 6, 4, 1);
+void drawAppMarketIcon(const DrawCtx &ctx) {
+  constexpr int cx = 23;
+  constexpr int boxW = 24;
+  constexpr int boxH = 13;
+  constexpr int boxX = cx - (boxW / 2);
+  constexpr int boxY = 22;
 
-  const int stemTop = (h * 8) / 46;
-  const int stemBottom = boxY - 2;
-  drawLine(buf, w, h, cx, stemTop, cx, stemBottom, 2);
+  drawRectBorder(ctx, boxX, boxY, boxW, boxH, 2);
+  drawRectBorder(ctx, boxX + 3, boxY - 5, boxW - 6, 4, 1);
+
+  constexpr int stemTop = 8;
+  constexpr int stemBottom = boxY - 2;
+  drawLineSegment(ctx, cx, stemTop, cx, stemBottom, 2);
 
   for (int i = 0; i < 5; ++i) {
-    fillRect(buf, w, h, cx - i, stemBottom + i, i * 2 + 1, 1);
+    drawFilledRect(ctx, cx - i, stemBottom + i, (i * 2) + 1, 1);
   }
 }
 
-void drawSettingsIcon(uint8_t *buf, int w, int h) {
-  clear(buf, w * h);
+void drawSettingsIcon(const DrawCtx &ctx) {
+  constexpr int cx = 23;
+  constexpr int cy = 23;
+  constexpr int outerR = 10;
+  constexpr int innerR = 4;
+  constexpr int toothLen = 4;
+  constexpr int toothW = 4;
+  constexpr int diag = 7;
 
-  const int cx = w / 2;
-  const int cy = h / 2;
-  int outerR = (w * 10) / 46;
-  if (outerR < 5) {
-    outerR = 5;
-  }
-  int innerR = (w * 4) / 46;
-  if (innerR < 2) {
-    innerR = 2;
-  }
-  int toothLen = (w * 4) / 46;
-  if (toothLen < 2) {
-    toothLen = 2;
-  }
-  int toothW = (w * 4) / 46;
-  if (toothW < 2) {
-    toothW = 2;
-  }
-  const int diag = (outerR * 7) / 10;
+  drawCircleOutline(ctx, cx, cy, outerR, outerR - innerR);
+  drawCircleOutline(ctx, cx, cy, outerR, 1);
 
-  fillCircle(buf, w, h, cx, cy, outerR, 255);
-  fillCircle(buf, w, h, cx, cy, innerR, 0);
+  drawFilledRect(ctx, cx - (toothW / 2), cy - outerR - toothLen + 1, toothW, toothLen);
+  drawFilledRect(ctx, cx - (toothW / 2), cy + outerR, toothW, toothLen);
+  drawFilledRect(ctx, cx - outerR - toothLen + 1, cy - (toothW / 2), toothLen, toothW);
+  drawFilledRect(ctx, cx + outerR, cy - (toothW / 2), toothLen, toothW);
 
-  // Cardinal teeth
-  fillRect(buf, w, h, cx - (toothW / 2), cy - outerR - toothLen + 1, toothW, toothLen);
-  fillRect(buf, w, h, cx - (toothW / 2), cy + outerR, toothW, toothLen);
-  fillRect(buf, w, h, cx - outerR - toothLen + 1, cy - (toothW / 2), toothLen, toothW);
-  fillRect(buf, w, h, cx + outerR, cy - (toothW / 2), toothLen, toothW);
+  drawFilledRect(ctx, cx - diag - (toothW / 2), cy - diag - (toothW / 2), toothW, toothW);
+  drawFilledRect(ctx, cx + diag - (toothW / 2), cy - diag - (toothW / 2), toothW, toothW);
+  drawFilledRect(ctx, cx - diag - (toothW / 2), cy + diag - (toothW / 2), toothW, toothW);
+  drawFilledRect(ctx, cx + diag - (toothW / 2), cy + diag - (toothW / 2), toothW, toothW);
+}
 
-  // Diagonal teeth
-  fillRect(buf, w, h, cx - diag - (toothW / 2), cy - diag - (toothW / 2), toothW, toothW);
-  fillRect(buf, w, h, cx + diag - (toothW / 2), cy - diag - (toothW / 2), toothW, toothW);
-  fillRect(buf, w, h, cx - diag - (toothW / 2), cy + diag - (toothW / 2), toothW, toothW);
-  fillRect(buf, w, h, cx + diag - (toothW / 2), cy + diag - (toothW / 2), toothW, toothW);
+void drawFileExplorerIcon(const DrawCtx &ctx) {
+  constexpr int fw = 30;
+  constexpr int fh = 18;
+  constexpr int fx = 8;
+  constexpr int fy = 18;
 
-  drawCircle(buf, w, h, cx, cy, outerR, 1, 255);
-  if (outerR > 2) {
-    drawCircle(buf, w, h, cx, cy, outerR - 2, 1, 0);
+  drawRectBorder(ctx, fx, fy, fw, fh, 2);
+
+  constexpr int tabW = 12;
+  constexpr int tabH = 5;
+  drawRectBorder(ctx, fx + 2, fy - tabH + 1, tabW, tabH, 1);
+
+  drawFilledRect(ctx, fx + 4, fy + 6, fw - 8, 2);
+}
+
+void drawOpenClawIcon(const DrawCtx &ctx) {
+  constexpr int cx = 23;
+  constexpr int cy = 24;
+  constexpr int nodeR = 3;
+
+  constexpr int lx = 12;
+  constexpr int ly = 15;
+  constexpr int rx = 34;
+  constexpr int ry = 15;
+  constexpr int bx = cx;
+  constexpr int by = 34;
+
+  drawLineSegment(ctx, cx, cy, lx, ly, 2);
+  drawLineSegment(ctx, cx, cy, rx, ry, 2);
+  drawLineSegment(ctx, cx, cy, bx, by, 2);
+  drawLineSegment(ctx, lx, ly, rx, ry, 1);
+
+  drawCircleOutline(ctx, cx, cy, nodeR + 1, 2);
+  drawFilledRect(ctx, cx - 1, cy - 1, 3, 3);
+  drawCircleOutline(ctx, lx, ly, nodeR, 2);
+  drawCircleOutline(ctx, rx, ry, nodeR, 2);
+  drawCircleOutline(ctx, bx, by, nodeR, 2);
+}
+
+void drawById(const DrawCtx &ctx, LauncherIconId id) {
+  switch (id) {
+    case LauncherIconId::AppMarket:
+      drawAppMarketIcon(ctx);
+      break;
+    case LauncherIconId::Settings:
+      drawSettingsIcon(ctx);
+      break;
+    case LauncherIconId::FileExplorer:
+      drawFileExplorerIcon(ctx);
+      break;
+    case LauncherIconId::OpenClaw:
+      drawOpenClawIcon(ctx);
+      break;
+    default:
+      break;
   }
 }
 
-void drawFileExplorerIcon(uint8_t *buf, int w, int h) {
-  clear(buf, w * h);
+void launcherIconEvent(lv_event_t *e) {
+  const lv_event_code_t code = lv_event_get_code(e);
+  if (code == LV_EVENT_REFR_EXT_DRAW_SIZE) {
+    int32_t *s = static_cast<int32_t *>(lv_event_get_param(e));
+    if (s && *s < 2) {
+      *s = 2;
+    }
+    return;
+  }
 
-  const int fw = (w * 30) / 46;
-  const int fh = (h * 18) / 46;
-  const int fx = (w - fw) / 2;
-  const int fy = (h * 18) / 46;
+  if (code != LV_EVENT_DRAW_MAIN) {
+    return;
+  }
 
-  drawRect(buf, w, h, fx, fy, fw, fh, 2);
+  const LauncherIconId *id = static_cast<const LauncherIconId *>(lv_event_get_user_data(e));
+  if (!id) {
+    return;
+  }
 
-  const int tabW = (w * 12) / 46;
-  const int tabH = (h * 5) / 46;
-  drawRect(buf, w, h, fx + 2, fy - tabH + 1, tabW, tabH, 1);
+  lv_obj_t *obj = static_cast<lv_obj_t *>(lv_event_get_current_target(e));
+  lv_layer_t *layer = lv_event_get_layer(e);
+  if (!obj || !layer) {
+    return;
+  }
 
-  fillRect(buf, w, h, fx + 4, fy + 6, fw - 8, 2);
-}
+  lv_area_t coords;
+  lv_obj_get_coords(obj, &coords);
 
-void drawOpenClawIcon(uint8_t *buf, int w, int h) {
-  clear(buf, w * h);
+  DrawCtx ctx;
+  ctx.layer = layer;
+  ctx.area = coords;
+  ctx.color = lv_obj_get_style_text_color(obj, LV_PART_MAIN);
+  ctx.w = lv_area_get_width(&coords);
+  ctx.h = lv_area_get_height(&coords);
+  ctx.minSide = ctx.w < ctx.h ? ctx.w : ctx.h;
 
-  const int cx = w / 2;
-  const int cy = (h * 24) / 46;
-  const int nodeR = (w * 3) / 46;
+  if (ctx.w <= 0 || ctx.h <= 0) {
+    return;
+  }
 
-  const int lx = (w * 12) / 46;
-  const int ly = (h * 15) / 46;
-  const int rx = (w * 34) / 46;
-  const int ry = (h * 15) / 46;
-  const int bx = cx;
-  const int by = (h * 34) / 46;
-
-  drawLine(buf, w, h, cx, cy, lx, ly, 2);
-  drawLine(buf, w, h, cx, cy, rx, ry, 2);
-  drawLine(buf, w, h, cx, cy, bx, by, 2);
-  drawLine(buf, w, h, lx, ly, rx, ry, 1);
-
-  drawCircle(buf, w, h, cx, cy, nodeR + 1, 2);
-  fillRect(buf, w, h, cx - 1, cy - 1, 3, 3);
-  drawCircle(buf, w, h, lx, ly, nodeR, 2);
-  drawCircle(buf, w, h, rx, ry, nodeR, 2);
-  drawCircle(buf, w, h, bx, by, nodeR, 2);
-}
-
-void buildSet(uint8_t *mainBuf, uint8_t *sideBuf) {
-  drawAppMarketIcon(mainBuf + (0 * kMainW * kMainH), kMainW, kMainH);
-  drawSettingsIcon(mainBuf + (1 * kMainW * kMainH), kMainW, kMainH);
-  drawFileExplorerIcon(mainBuf + (2 * kMainW * kMainH), kMainW, kMainH);
-  drawOpenClawIcon(mainBuf + (3 * kMainW * kMainH), kMainW, kMainH);
-
-  drawAppMarketIcon(sideBuf + (0 * kSideW * kSideH), kSideW, kSideH);
-  drawSettingsIcon(sideBuf + (1 * kSideW * kSideH), kSideW, kSideH);
-  drawFileExplorerIcon(sideBuf + (2 * kSideW * kSideH), kSideW, kSideH);
-  drawOpenClawIcon(sideBuf + (3 * kSideW * kSideH), kSideW, kSideH);
-}
-
-void setupDsc(lv_image_dsc_t &dsc, const uint8_t *data, int w, int h) {
-  dsc.header.magic = LV_IMAGE_HEADER_MAGIC;
-  dsc.header.cf = LV_COLOR_FORMAT_A8;
-  dsc.header.flags = 0;
-  dsc.header.w = static_cast<uint16_t>(w);
-  dsc.header.h = static_cast<uint16_t>(h);
-  dsc.header.stride = static_cast<uint16_t>(w);
-  dsc.header.reserved_2 = 0;
-  dsc.data_size = static_cast<uint32_t>(w * h);
-  dsc.data = data;
-  dsc.reserved = nullptr;
-  dsc.reserved_2 = nullptr;
+  drawById(ctx, *id);
 }
 
 }  // namespace
 
 bool initLauncherIcons() {
-  if (gInitialized) {
-    return true;
-  }
-
-  buildSet(&gMainData[0][0], &gSideData[0][0]);
-
-  for (int i = 0; i < kIconCount; ++i) {
-    setupDsc(gMainDsc[i], &gMainData[i][0], kMainW, kMainH);
-    setupDsc(gSideDsc[i], &gSideData[i][0], kSideW, kSideH);
-  }
-
   gInitialized = true;
   return true;
 }
@@ -273,18 +276,44 @@ bool launcherIconsReady() {
   return gInitialized;
 }
 
-const lv_image_dsc_t *getLauncherIcon(LauncherIconId id, LauncherIconVariant variant) {
-  if (!gInitialized) {
-    return nullptr;
-  }
-
-  const int iconIndex = static_cast<int>(id);
-  if (iconIndex < 0 || iconIndex >= kIconCount) {
-    return nullptr;
-  }
-
+int launcherIconRenderSize(LauncherIconVariant variant) {
   if (variant == LauncherIconVariant::Side) {
-    return &gSideDsc[iconIndex];
+    return kSideRenderSize;
   }
-  return &gMainDsc[iconIndex];
+  return kMainRenderSize;
+}
+
+lv_obj_t *createLauncherIcon(lv_obj_t *parent,
+                             LauncherIconId id,
+                             LauncherIconVariant variant,
+                             lv_color_t color) {
+  if (!parent) {
+    return nullptr;
+  }
+
+  const int idx = static_cast<int>(id);
+  if (idx < 0 || idx >= kIconCount) {
+    return nullptr;
+  }
+
+  lv_obj_t *icon = lv_obj_create(parent);
+  if (!icon) {
+    return nullptr;
+  }
+
+  lv_obj_remove_style_all(icon);
+  const int size = launcherIconRenderSize(variant);
+  lv_obj_set_size(icon, size, size);
+  lv_obj_set_style_bg_opa(icon, LV_OPA_TRANSP, 0);
+  lv_obj_set_style_border_width(icon, 0, 0);
+  lv_obj_set_style_outline_width(icon, 0, 0);
+  lv_obj_set_style_pad_all(icon, 0, 0);
+  lv_obj_set_style_radius(icon, 0, 0);
+  lv_obj_set_style_text_color(icon, color, 0);
+  lv_obj_set_style_opa(icon, LV_OPA_COVER, 0);
+  lv_obj_clear_flag(icon, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_clear_flag(icon, LV_OBJ_FLAG_CLICKABLE);
+
+  lv_obj_add_event_cb(icon, launcherIconEvent, LV_EVENT_ALL, (void *)&kIconUserData[idx]);
+  return icon;
 }

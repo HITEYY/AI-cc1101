@@ -1344,46 +1344,30 @@ class UiRuntime::Impl {
     const String nextName = ellipsize(items[static_cast<size_t>(nextIndex)], 10);
 
     constexpr int kMainIconOffsetY = -6;
-    constexpr int kMainIconBaseH = 46;
-    constexpr int kMainIconScale = 384;  // 1.5x (256 == 1.0x)
+    const int mainIconRenderH = launcherIconRenderSize(LauncherIconVariant::Main);
     bool iconDrawn = launcherIconsAvailable && launcherIconsReady();
     if (iconDrawn) {
       const LauncherIconId selectedIcon = iconIdFromLauncherIndex(safeSelected);
       const LauncherIconId prevIcon = iconIdFromLauncherIndex(prevIndex);
       const LauncherIconId nextIcon = iconIdFromLauncherIndex(nextIndex);
 
-      const lv_image_dsc_t *mainIcon = getLauncherIcon(selectedIcon, LauncherIconVariant::Main);
-      const lv_image_dsc_t *leftIcon = getLauncherIcon(prevIcon, LauncherIconVariant::Side);
-      const lv_image_dsc_t *rightIcon = getLauncherIcon(nextIcon, LauncherIconVariant::Side);
-      if (!mainIcon || !leftIcon || !rightIcon) {
+      lv_obj_t *centerIcon = createLauncherIcon(
+          screen, selectedIcon, LauncherIconVariant::Main, lv_color_hex(kLauncherPrimary));
+      lv_obj_t *leftIcon = createLauncherIcon(
+          screen, prevIcon, LauncherIconVariant::Side, lv_color_hex(kLauncherSide));
+      lv_obj_t *rightIcon = createLauncherIcon(
+          screen, nextIcon, LauncherIconVariant::Side, lv_color_hex(kLauncherSide));
+      if (!centerIcon || !leftIcon || !rightIcon) {
         iconDrawn = false;
       } else {
-        lv_obj_t *centerImg = lv_image_create(screen);
-        disableScroll(centerImg);
-        lv_obj_set_style_bg_opa(centerImg, LV_OPA_TRANSP, 0);
-        lv_image_set_src(centerImg, mainIcon);
-        lv_obj_set_style_image_recolor(centerImg, lv_color_hex(kLauncherPrimary), 0);
-        lv_obj_set_style_image_recolor_opa(centerImg, LV_OPA_COVER, 0);
-        lv_image_set_scale(centerImg, kMainIconScale);
-        lv_obj_align(centerImg, LV_ALIGN_CENTER, 0, kMainIconOffsetY);
+        disableScroll(centerIcon);
+        lv_obj_align(centerIcon, LV_ALIGN_CENTER, 0, kMainIconOffsetY);
 
-        lv_obj_t *leftImg = lv_image_create(screen);
-        disableScroll(leftImg);
-        lv_obj_set_style_bg_opa(leftImg, LV_OPA_TRANSP, 0);
-        lv_image_set_src(leftImg, leftIcon);
-        lv_obj_set_style_image_recolor(leftImg, lv_color_hex(kLauncherSide), 0);
-        lv_obj_set_style_image_recolor_opa(leftImg, LV_OPA_COVER, 0);
-        lv_image_set_scale(leftImg, kMainIconScale);
-        lv_obj_align(leftImg, LV_ALIGN_CENTER, -92, kMainIconOffsetY);
+        disableScroll(leftIcon);
+        lv_obj_align(leftIcon, LV_ALIGN_CENTER, -92, kMainIconOffsetY);
 
-        lv_obj_t *rightImg = lv_image_create(screen);
-        disableScroll(rightImg);
-        lv_obj_set_style_bg_opa(rightImg, LV_OPA_TRANSP, 0);
-        lv_image_set_src(rightImg, rightIcon);
-        lv_obj_set_style_image_recolor(rightImg, lv_color_hex(kLauncherSide), 0);
-        lv_obj_set_style_image_recolor_opa(rightImg, LV_OPA_COVER, 0);
-        lv_image_set_scale(rightImg, kMainIconScale);
-        lv_obj_align(rightImg, LV_ALIGN_CENTER, 92, kMainIconOffsetY);
+        disableScroll(rightIcon);
+        lv_obj_align(rightIcon, LV_ALIGN_CENTER, 92, kMainIconOffsetY);
       }
     }
 
@@ -1411,8 +1395,7 @@ class UiRuntime::Impl {
     lv_obj_set_style_text_color(nameLabel, lv_color_hex(kLauncherMuted), 0);
     int nameY = (h / 2) + 42;
     if (iconDrawn) {
-      const int scaledMainIconH = (kMainIconBaseH * kMainIconScale + 128) / 256;
-      const int iconBottom = (h / 2) + kMainIconOffsetY + (scaledMainIconH / 2);
+      const int iconBottom = (h / 2) + kMainIconOffsetY + (mainIconRenderH / 2);
       nameY = iconBottom + 4;
     }
     if (nameY > h - 16) {

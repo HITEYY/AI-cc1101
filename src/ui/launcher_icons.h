@@ -17,5 +17,8 @@ enum class LauncherIconVariant : uint8_t {
 
 bool initLauncherIcons();
 bool launcherIconsReady();
-const lv_image_dsc_t *getLauncherIcon(LauncherIconId id, LauncherIconVariant variant);
-
+int launcherIconRenderSize(LauncherIconVariant variant);
+lv_obj_t *createLauncherIcon(lv_obj_t *parent,
+                             LauncherIconId id,
+                             LauncherIconVariant variant,
+                             lv_color_t color);
