@@ -13,6 +13,7 @@
 #include <sys/time.h>
 
 #include "../core/board_pins.h"
+#include "fonts/lv_font_korean_ui_14.h"
 #include "input_adapter.h"
 #include "launcher_icons.h"
 #include "lvgl_port.h"
@@ -283,11 +284,40 @@ bool extractUint64JsonField(const String &json, const char *key, uint64_t *value
 }
 
 String ellipsize(const String &text, size_t maxLen) {
-  if (maxLen < 4 || text.length() <= maxLen) {
+  if (maxLen < 4) {
     return text;
   }
-  const size_t keep = maxLen - 3;
-  return text.substring(0, keep) + "...";
+
+  auto isUtf8ContinuationByte = [](uint8_t byte) -> bool {
+    return (byte & 0xC0U) == 0x80U;
+  };
+
+  size_t glyphCount = 0;
+  for (size_t i = 0; i < text.length(); ++i) {
+    const uint8_t byte = static_cast<uint8_t>(text[static_cast<unsigned int>(i)]);
+    if (!isUtf8ContinuationByte(byte)) {
+      ++glyphCount;
+    }
+  }
+  if (glyphCount <= maxLen) {
+    return text;
+  }
+
+  const size_t keepGlyphs = maxLen - 3;
+  size_t keepBytes = text.length();
+  size_t seenGlyphs = 0;
+  for (size_t i = 0; i < text.length(); ++i) {
+    const uint8_t byte = static_cast<uint8_t>(text[static_cast<unsigned int>(i)]);
+    if (!isUtf8ContinuationByte(byte)) {
+      if (seenGlyphs == keepGlyphs) {
+        keepBytes = i;
+        break;
+      }
+      ++seenGlyphs;
+    }
+  }
+
+  return text.substring(0, keepBytes) + "...";
 }
 
 LauncherIconId iconIdFromLauncherIndex(int index) {
@@ -379,11 +409,14 @@ class UiRuntime::Impl {
                                               lv_palette_main(LV_PALETTE_BLUE),
                                               lv_palette_main(LV_PALETTE_BLUE_GREY),
                                               true,
-                                              &lv_font_montserrat_14);
+                                              font());
     lv_display_set_theme(port.display(), theme);
   }
 
   const lv_font_t *font() const {
+    if (language == UiLanguage::Korean) {
+      return &lv_font_korean_ui_14;
+    }
     return &lv_font_montserrat_14;
   }
 
@@ -2100,6 +2133,9 @@ void UiRuntime::setStatusLine(const String &line) {
 
 void UiRuntime::setLanguage(UiLanguage language) {
   impl_->language = language;
+  if (impl_->port.ready()) {
+    impl_->applyTheme();
+  }
 }
 
 UiLanguage UiRuntime::language() const {
