@@ -388,11 +388,9 @@ bool sendMainSessionResetGreeting(AppContext &ctx,
   payloadText += kSessionResetPrompt;
 
   DynamicJsonDocument payload(2048);
-  const String messageId = makeMessageId("txt");
   payload["message"] = payloadText;
   payload["sessionKey"] = sessionKey;
   payload["deliver"] = false;
-  const uint64_t ts = currentUnixMs();
 
   if (!ctx.gateway->sendNodeEvent("agent.request", payload)) {
     ctx.uiRuntime->showToast("Messenger", "Text send failed", 1500, backgroundTick);
@@ -400,18 +398,7 @@ bool sendMainSessionResetGreeting(AppContext &ctx,
   }
 
   clearMessengerMessages(ctx);
-
-  GatewayInboxMessage sent;
-  sent.id = messageId;
-  sent.event = "agent.request";
-  sent.type = "text";
-  sent.from = kMessageSenderId;
-  sent.to = kDefaultSessionAgentId;
-  sent.text = kSessionResetPrompt;
-  sent.tsMs = ts;
-  pushOutbox(sent);
-
-  ctx.uiRuntime->showToast("Messenger", "Text sent", 1100, backgroundTick);
+  ctx.uiRuntime->showToast("Messenger", "New session started", 1100, backgroundTick);
   return true;
 }
 
