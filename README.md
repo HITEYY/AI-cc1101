@@ -107,6 +107,23 @@ pio run -e t-embed-cc1101 -t upload
 pio device monitor -b 115200
 ```
 
+## 펌웨어 릴리즈 워크플로우
+
+`.github/workflows/release.yml`이 GitHub Release를 자동 생성합니다.
+
+1. 태그 기반 릴리즈
+```bash
+git tag v1.0.0
+git push origin v1.0.0
+```
+2. 수동 릴리즈
+- GitHub Actions에서 `Release Firmware` 실행
+- 입력값: `tag` (예: `v1.0.0`), 필요 시 `prerelease`, `draft`
+
+생성 자산:
+- `openclaw-t-embed-cc1101-<tag>.bin`
+- `openclaw-t-embed-cc1101-<tag>.bin.sha256`
+
 ## 기본값 시드
 
 `include/user_config.h`는 **초기 시드**로만 사용됩니다.

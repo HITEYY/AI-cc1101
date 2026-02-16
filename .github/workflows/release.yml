@@ -4,6 +4,22 @@ on:
   push:
     tags:
       - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag (example: v1.0.0)"
+        required: true
+        type: string
+      prerelease:
+        description: "Mark as pre-release"
+        required: false
+        default: false
+        type: boolean
+      draft:
+        description: "Create as draft release"
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: write
@@ -13,9 +29,28 @@ jobs:
     runs-on: ubuntu-latest
     env:
       PIO_ENV: t-embed-cc1101
+      RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.tag || github.ref_name }}
+      RELEASE_PRERELEASE: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.prerelease || 'false' }}
+      RELEASE_DRAFT: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.draft || 'false' }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Validate release tag
+        run: |
+          TAG="$(echo "$RELEASE_TAG" | tr -d '[:space:]')"
+          if [ -z "$TAG" ]; then
+            echo "Release tag is empty"
+            exit 1
+          fi
+          if [[ ! "$TAG" =~ ^v[0-9A-Za-z._-]+$ ]]; then
+            echo "Invalid tag format: $TAG"
+            echo "Tag must start with 'v' (example: v1.0.0)"
+            exit 1
+          fi
+          echo "RELEASE_TAG=$TAG" >> "$GITHUB_ENV"
 
       - name: Setup Python
         uses: actions/setup-python@v5
@@ -31,14 +66,18 @@ jobs:
       - name: Package release assets
         run: |
           mkdir -p dist
-          ASSET_NAME="openclaw-${PIO_ENV}-${GITHUB_REF_NAME}.bin"
+          ASSET_NAME="openclaw-${PIO_ENV}-${RELEASE_TAG}.bin"
           cp ".pio/build/${PIO_ENV}/firmware.bin" "dist/${ASSET_NAME}"
           sha256sum "dist/${ASSET_NAME}" > "dist/${ASSET_NAME}.sha256"
 
       - name: Create GitHub release
         uses: softprops/action-gh-release@v2
         with:
-          name: ${{ github.ref_name }}
+          tag_name: ${{ env.RELEASE_TAG }}
+          target_commitish: ${{ github.sha }}
+          name: ${{ env.RELEASE_TAG }}
+          draft: ${{ env.RELEASE_DRAFT == 'true' }}
+          prerelease: ${{ env.RELEASE_PRERELEASE == 'true' }}
           generate_release_notes: true
           files: |
             dist/*.bin
