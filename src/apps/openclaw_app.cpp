@@ -1254,6 +1254,9 @@ std::vector<String> buildStatusLines(AppContext &ctx) {
   lines.push_back("Wi-Fi SSID: " + (ctx.wifi->ssid().isEmpty() ? String("(empty)") : ctx.wifi->ssid()));
   lines.push_back("IP: " + (ctx.wifi->ip().isEmpty() ? String("-") : ctx.wifi->ip()));
   lines.push_back("RSSI: " + String(ctx.wifi->rssi()));
+  if (ctx.wifi->hasConnectionError()) {
+    lines.push_back("Wi-Fi Error: " + ctx.wifi->lastConnectionError());
+  }
   lines.push_back("Gateway URL: " + (ctx.config.gatewayUrl.isEmpty() ? String("(empty)") : ctx.config.gatewayUrl));
   lines.push_back("WS Connected: " + boolLabel(gs.wsConnected));
   lines.push_back("Gateway Ready: " + boolLabel(gs.gatewayReady));

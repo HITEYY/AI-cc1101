@@ -52,12 +52,20 @@ void requestWifiReconnect(AppContext &ctx,
     return;
   }
 
-  ctx.wifi->connectNow();
+  const bool started = ctx.wifi->connectNow();
   if (showToast) {
-    ctx.uiRuntime->showToast("Wi-Fi",
-                      "Connecting to " + ctx.config.wifiSsid,
-                      1500,
-                      backgroundTick);
+    if (started) {
+      ctx.uiRuntime->showToast("Wi-Fi",
+                               "Connecting to " + ctx.config.wifiSsid,
+                               1500,
+                               backgroundTick);
+    } else {
+      String error = ctx.wifi->lastConnectionError();
+      if (error.isEmpty()) {
+        error = "Connect request skipped";
+      }
+      ctx.uiRuntime->showToast("Wi-Fi", error, 1700, backgroundTick);
+    }
   }
 }
 
@@ -138,9 +146,13 @@ void runWifiMenu(AppContext &ctx,
     menu.push_back("Clear Wi-Fi");
     menu.push_back("Back");
 
-    const String subtitle = ctx.config.wifiSsid.isEmpty()
-                                ? String("SSID: (empty)")
-                                : String("SSID: ") + ctx.config.wifiSsid;
+    String subtitle = ctx.config.wifiSsid.isEmpty()
+                          ? String("SSID: (empty)")
+                          : String("SSID: ") + ctx.config.wifiSsid;
+    if (ctx.wifi->hasConnectionError()) {
+      subtitle += " / ";
+      subtitle += ctx.wifi->lastConnectionError();
+    }
 
     const int choice = ctx.uiRuntime->menuLoop("Setting / Wi-Fi",
                                         menu,

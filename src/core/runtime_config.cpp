@@ -54,6 +54,19 @@ bool startsWithWsScheme(const String &url) {
   return url.startsWith("ws://") || url.startsWith("wss://");
 }
 
+bool isLikelyHexString(const String &value) {
+  for (size_t i = 0; i < value.length(); ++i) {
+    const char c = value[static_cast<unsigned int>(i)];
+    const bool isHex = (c >= '0' && c <= '9') ||
+                       (c >= 'a' && c <= 'f') ||
+                       (c >= 'A' && c <= 'F');
+    if (!isHex) {
+      return false;
+    }
+  }
+  return true;
+}
+
 void appendMessage(String &target, const String &message) {
   if (message.isEmpty()) {
     return;
@@ -614,6 +627,23 @@ bool validateConfig(const RuntimeConfig &config, String *error) {
       *error = "Wi-Fi password exists but SSID is empty";
     }
     return false;
+  }
+
+  if (!config.wifiPassword.isEmpty()) {
+    const size_t passLen = config.wifiPassword.length();
+    const bool is64Hex = passLen == 64 && isLikelyHexString(config.wifiPassword);
+    if (passLen < 8) {
+      if (error) {
+        *error = "Wi-Fi password must be 8+ chars";
+      }
+      return false;
+    }
+    if (passLen > 63 && !is64Hex) {
+      if (error) {
+        *error = "Wi-Fi password must be 8~63 chars (or 64 hex)";
+      }
+      return false;
+    }
   }
 
   if (!config.gatewayUrl.isEmpty()) {

@@ -7,6 +7,7 @@
 namespace {
 
 constexpr unsigned long kConnectRetryMs = 3500UL;
+constexpr unsigned long kConnectAttemptTimeoutMs = 12000UL;
 
 bool containsSsid(const std::vector<String> &list, const String &value) {
   for (std::vector<String>::const_iterator it = list.begin(); it != list.end(); ++it) {
@@ -24,6 +25,9 @@ void WifiManager::begin() {
   WiFi.mode(WIFI_STA);
   WiFi.setAutoReconnect(true);
   WiFi.setSleep(false);
+  connectInProgress_ = false;
+  connectStartedMs_ = 0;
+  lastError_ = "";
 }
 
 void WifiManager::configure(const RuntimeConfig &config) {
@@ -36,6 +40,9 @@ void WifiManager::configure(const RuntimeConfig &config) {
   if (targetSsid_.isEmpty()) {
     WiFi.disconnect(true, false);
     lastConnectAttemptMs_ = 0;
+    connectInProgress_ = false;
+    connectStartedMs_ = 0;
+    lastError_ = "";
     return;
   }
 
@@ -49,7 +56,13 @@ void WifiManager::tick() {
   if (targetSsid_.isEmpty()) {
     return;
   }
+  refreshConnectState();
+
   if (WiFi.status() == WL_CONNECTED) {
+    return;
+  }
+
+  if (connectInProgress_) {
     return;
   }
 
@@ -61,14 +74,24 @@ void WifiManager::tick() {
   startConnectAttempt(false);
 }
 
-void WifiManager::connectNow() {
+bool WifiManager::connectNow() {
   if (targetSsid_.isEmpty()) {
-    return;
+    lastError_ = "SSID is empty";
+    return false;
   }
-  startConnectAttempt(true);
+  refreshConnectState();
+  if (connectInProgress_) {
+    lastError_ = "Wi-Fi is already connecting";
+    return false;
+  }
+  return startConnectAttempt(true);
 }
 
 void WifiManager::disconnect() {
+  connectInProgress_ = false;
+  connectStartedMs_ = 0;
+  lastConnectAttemptMs_ = 0;
+  lastError_ = "";
   WiFi.disconnect(true, false);
 }
 
@@ -78,6 +101,10 @@ bool WifiManager::isConnected() const {
 
 bool WifiManager::hasCredentials() const {
   return !targetSsid_.isEmpty();
+}
+
+bool WifiManager::hasConnectionError() const {
+  return !lastError_.isEmpty();
 }
 
 String WifiManager::ssid() const {
@@ -96,6 +123,10 @@ int WifiManager::rssi() const {
     return 0;
   }
   return WiFi.RSSI();
+}
+
+String WifiManager::lastConnectionError() const {
+  return lastError_;
 }
 
 bool WifiManager::scanNetworks(std::vector<String> &outSsids, String *error) {
@@ -140,17 +171,114 @@ bool WifiManager::scanNetworks(std::vector<String> &outSsids, String *error) {
   return true;
 }
 
-void WifiManager::startConnectAttempt(bool disconnectFirst) {
+bool WifiManager::startConnectAttempt(bool disconnectFirst) {
   if (targetSsid_.isEmpty()) {
-    return;
+    lastError_ = "SSID is empty";
+    return false;
+  }
+
+  if (connectInProgress_ && !disconnectFirst) {
+    return false;
+  }
+
+  String credentialErr;
+  if (!validateCredentials(&credentialErr)) {
+    lastError_ = credentialErr;
+    return false;
+  }
+
+  if (disconnectFirst) {
+    connectInProgress_ = false;
+    WiFi.disconnect(true, false);
+    delay(400);
   }
 
   WiFi.mode(WIFI_STA);
-  if (disconnectFirst) {
-    WiFi.disconnect(false, false);
-    delay(40);
-  }
-
   WiFi.begin(targetSsid_.c_str(), targetPassword_.c_str());
   lastConnectAttemptMs_ = millis();
+  connectStartedMs_ = lastConnectAttemptMs_;
+  connectInProgress_ = true;
+  lastError_ = "";
+  return true;
+}
+
+void WifiManager::refreshConnectState() {
+  const wl_status_t status = WiFi.status();
+  if (status == WL_CONNECTED) {
+    connectInProgress_ = false;
+    connectStartedMs_ = 0;
+    lastError_ = "";
+    return;
+  }
+
+  if (!connectInProgress_) {
+    return;
+  }
+
+  if (status == WL_CONNECT_FAILED ||
+      status == WL_NO_SSID_AVAIL ||
+      status == WL_CONNECTION_LOST) {
+    connectInProgress_ = false;
+    connectStartedMs_ = 0;
+    if (status == WL_NO_SSID_AVAIL) {
+      lastError_ = "SSID not found";
+    } else if (status == WL_CONNECT_FAILED) {
+      // ESP32 often reports this for auth failures (wrong password/security mismatch).
+      lastError_ = "Authentication failed (check password)";
+    } else {
+      lastError_ = "Wi-Fi connection lost";
+    }
+    return;
+  }
+
+  const unsigned long now = millis();
+  if (connectStartedMs_ != 0 && now - connectStartedMs_ >= kConnectAttemptTimeoutMs) {
+    connectInProgress_ = false;
+    connectStartedMs_ = 0;
+    lastError_ = "Wi-Fi connection timeout";
+  }
+}
+
+bool WifiManager::validateCredentials(String *error) const {
+  if (targetSsid_.isEmpty()) {
+    if (error) {
+      *error = "SSID is empty";
+    }
+    return false;
+  }
+
+  if (targetPassword_.isEmpty()) {
+    return true;
+  }
+
+  const size_t passwordLen = targetPassword_.length();
+  const bool is64Hex = passwordLen == 64 && isLikelyHexString(targetPassword_);
+  if (passwordLen < 8) {
+    if (error) {
+      *error = "Wi-Fi password must be 8+ chars";
+    }
+    return false;
+  }
+
+  if (passwordLen > 63 && !is64Hex) {
+    if (error) {
+      *error = "Wi-Fi password must be 8~63 chars (or 64 hex)";
+    }
+    return false;
+  }
+
+  return true;
+}
+
+bool WifiManager::isLikelyHexString(const String &value) {
+  for (size_t i = 0; i < value.length(); ++i) {
+    const char c = value[static_cast<unsigned int>(i)];
+    const bool isHex = (c >= '0' && c <= '9') ||
+                       (c >= 'a' && c <= 'f') ||
+                       (c >= 'A' && c <= 'F');
+    if (!isHex) {
+      return false;
+    }
+  }
+  return true;
 }
