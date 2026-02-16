@@ -33,6 +33,13 @@ constexpr const char *kDefaultSessionKey = "agent:main:main";
 constexpr size_t kMessageChunkBytes = 256;
 constexpr size_t kBase64ChunkBufferBytes =
     ((kMessageChunkBytes + 2U) / 3U) * 4U + 1U;
+constexpr size_t kAgentAttachmentChunkBytes = 3072;
+constexpr size_t kAgentAttachmentBase64ChunkBytes =
+    ((kAgentAttachmentChunkBytes + 2U) / 3U) * 4U + 1U;
+constexpr uint16_t kAgentAttachmentMaxChunks = 80;
+constexpr uint32_t kAgentAttachmentMaxBytes =
+    static_cast<uint32_t>(kAgentAttachmentChunkBytes) *
+    static_cast<uint32_t>(kAgentAttachmentMaxChunks);
 constexpr uint32_t kMaxVoiceBytes = 2097152;
 constexpr uint32_t kMaxFileBytes = 4194304;
 constexpr uint8_t kChunkSendMaxRetries = 3;
@@ -60,6 +67,12 @@ struct SdSelectEntry {
   String label;
   bool isDirectory = false;
   uint64_t size = 0;
+};
+
+enum class AgentAttachmentSendResult {
+  Sent,
+  NotAttempted,
+  Failed,
 };
 
 class ScopedOkBackBlock {
@@ -777,6 +790,161 @@ void sendTextMessage(AppContext &ctx,
   sendTextPayload(ctx, text, backgroundTick);
 }
 
+bool sendAgentRequestMessage(AppContext &ctx,
+                             const String &sessionKey,
+                             const String &message,
+                             const std::function<void()> &backgroundTick) {
+  if (message.isEmpty()) {
+    return false;
+  }
+
+  size_t payloadCap = message.length() + 640U;
+  if (payloadCap < 1024U) {
+    payloadCap = 1024U;
+  }
+
+  DynamicJsonDocument payload(payloadCap);
+  payload["message"] = message;
+  payload["sessionKey"] = sessionKey;
+  payload["deliver"] = false;
+  payload["thinking"] = "low";
+  return sendGatewayEventWithRetry(ctx, "agent.request", payload, backgroundTick);
+}
+
+AgentAttachmentSendResult sendAttachmentViaAgentRequest(
+    AppContext &ctx,
+    const String &filePath,
+    const String &mimeType,
+    const char *kind,
+    const String &caption,
+    uint32_t totalBytes,
+    const std::function<void()> &backgroundTick) {
+  if (!kind || totalBytes == 0 || totalBytes > kAgentAttachmentMaxBytes) {
+    return AgentAttachmentSendResult::NotAttempted;
+  }
+
+  if (!ensureMessengerSessionSubscription(ctx, backgroundTick)) {
+    return AgentAttachmentSendResult::Failed;
+  }
+
+  const String sessionKey = activeMessengerSessionKey();
+  const String fileName = baseName(filePath);
+  const String attachmentId = makeMessageId(kind);
+  const uint16_t totalChunks = static_cast<uint16_t>(
+      (totalBytes + static_cast<uint32_t>(kAgentAttachmentChunkBytes) - 1U) /
+      static_cast<uint32_t>(kAgentAttachmentChunkBytes));
+
+  sendChatSessionEvent(ctx, "chat.unsubscribe", sessionKey);
+  gSubscribedSessionKey = "";
+  gSubscribedConnectOkMs = 0;
+
+  File file = SD.open(filePath.c_str(), FILE_READ);
+  if (!file || file.isDirectory()) {
+    if (file) {
+      file.close();
+    }
+    ensureMessengerSessionSubscription(ctx, backgroundTick, false);
+    return AgentAttachmentSendResult::Failed;
+  }
+
+  std::vector<uint8_t> raw(kAgentAttachmentChunkBytes, 0);
+  std::vector<char> encoded(kAgentAttachmentBase64ChunkBytes, 0);
+  if (raw.empty() || encoded.empty()) {
+    file.close();
+    ensureMessengerSessionSubscription(ctx, backgroundTick, false);
+    return AgentAttachmentSendResult::Failed;
+  }
+
+  bool failed = false;
+  uint16_t chunkIndex = 0;
+  while (file.available() && chunkIndex < totalChunks) {
+    const size_t readLen = file.read(raw.data(), raw.size());
+    if (readLen == 0) {
+      break;
+    }
+
+    size_t encodedLen = 0;
+    if (!encodeBase64(raw.data(),
+                      readLen,
+                      encoded.data(),
+                      encoded.size(),
+                      &encodedLen)) {
+      failed = true;
+      break;
+    }
+
+    String chunkMessage;
+    chunkMessage.reserve(encodedLen + 320U);
+    chunkMessage += "[ATTACHMENT_CHUNK]\n";
+    chunkMessage += "id:";
+    chunkMessage += attachmentId;
+    chunkMessage += "\nkind:";
+    chunkMessage += kind;
+    chunkMessage += "\nname:";
+    chunkMessage += fileName;
+    chunkMessage += "\nmime:";
+    chunkMessage += mimeType;
+    chunkMessage += "\nchunk:";
+    chunkMessage += String(static_cast<unsigned long>(chunkIndex + 1));
+    chunkMessage += "/";
+    chunkMessage += String(static_cast<unsigned long>(totalChunks));
+    chunkMessage += "\ndata:";
+    chunkMessage += encoded.data();
+    chunkMessage += "\nReply with NO_REPLY only.";
+
+    if (!sendAgentRequestMessage(ctx, sessionKey, chunkMessage, backgroundTick)) {
+      failed = true;
+      break;
+    }
+
+    ++chunkIndex;
+    if (backgroundTick && ((chunkIndex % 4U) == 0U)) {
+      backgroundTick();
+    }
+  }
+  file.close();
+
+  if (!failed && chunkIndex != totalChunks) {
+    failed = true;
+  }
+
+  if (!ensureMessengerSessionSubscription(ctx, backgroundTick, false)) {
+    failed = true;
+  }
+
+  if (failed) {
+    return AgentAttachmentSendResult::Failed;
+  }
+
+  String finalMessage;
+  finalMessage.reserve(caption.length() + 512U);
+  finalMessage += "[ATTACHMENT_COMPLETE]\n";
+  finalMessage += "id:";
+  finalMessage += attachmentId;
+  finalMessage += "\nkind:";
+  finalMessage += kind;
+  finalMessage += "\nname:";
+  finalMessage += fileName;
+  finalMessage += "\nmime:";
+  finalMessage += mimeType;
+  finalMessage += "\nsize:";
+  finalMessage += String(static_cast<unsigned long>(totalBytes));
+  finalMessage += "\nchunks:";
+  finalMessage += String(static_cast<unsigned long>(totalChunks));
+  if (!caption.isEmpty()) {
+    finalMessage += "\ncaption:";
+    finalMessage += caption;
+  }
+  finalMessage +=
+      "\nDecode ATTACHMENT_CHUNK data with the same id and process it as one file.";
+
+  if (!sendAgentRequestMessage(ctx, sessionKey, finalMessage, backgroundTick)) {
+    return AgentAttachmentSendResult::Failed;
+  }
+
+  return AgentAttachmentSendResult::Sent;
+}
+
 bool sendVoiceFileMessage(AppContext &ctx,
                           const String &filePath,
                           const String &caption,
@@ -813,16 +981,52 @@ bool sendVoiceFileMessage(AppContext &ctx,
     return false;
   }
 
+  const String mimeType = detectAudioMime(filePath);
+  const uint64_t metaTs = currentUnixMs();
+
+  const AgentAttachmentSendResult agentSend = sendAttachmentViaAgentRequest(
+      ctx,
+      filePath,
+      mimeType,
+      "voice",
+      caption,
+      totalBytes,
+      backgroundTick);
+  if (agentSend == AgentAttachmentSendResult::Sent) {
+    file.close();
+
+    GatewayInboxMessage sent;
+    sent.id = makeMessageId("voice");
+    sent.event = "agent.request";
+    sent.type = "voice";
+    sent.from = kMessageSenderId;
+    sent.to = kDefaultSessionAgentId;
+    sent.text = caption;
+    sent.fileName = baseName(filePath);
+    sent.contentType = mimeType;
+    sent.voiceBytes = totalBytes;
+    sent.tsMs = metaTs;
+    pushOutbox(sent);
+
+    ctx.uiRuntime->showToast("Voice", "Voice sent", 1200, backgroundTick);
+    return true;
+  }
+
   const uint16_t totalChunks = static_cast<uint16_t>(
       (totalBytes + static_cast<uint32_t>(kMessageChunkBytes) - 1U) /
       static_cast<uint32_t>(kMessageChunkBytes));
   const String messageId = makeMessageId("voice");
-  const String mimeType = detectAudioMime(filePath);
+  if (!ensureMessengerSessionSubscription(ctx, backgroundTick)) {
+    file.close();
+    return false;
+  }
+  const String sessionKey = activeMessengerSessionKey();
 
   DynamicJsonDocument meta(2048);
   meta["id"] = messageId;
   meta["from"] = kMessageSenderId;
   meta["to"] = target;
+  meta["sessionKey"] = sessionKey;
   meta["type"] = "voice";
   meta["fileName"] = baseName(filePath);
   meta["contentType"] = mimeType;
@@ -831,7 +1035,6 @@ bool sendVoiceFileMessage(AppContext &ctx,
   if (!caption.isEmpty()) {
     meta["text"] = caption;
   }
-  const uint64_t metaTs = currentUnixMs();
   if (metaTs > 0) {
     meta["ts"] = metaTs;
   }
@@ -871,6 +1074,7 @@ bool sendVoiceFileMessage(AppContext &ctx,
     chunk["id"] = messageId;
     chunk["from"] = kMessageSenderId;
     chunk["to"] = target;
+    chunk["sessionKey"] = sessionKey;
     chunk["seq"] = static_cast<uint32_t>(chunkIndex + 1);
     chunk["chunks"] = totalChunks;
     chunk["last"] = (chunkIndex + 1) >= totalChunks;
@@ -1147,16 +1351,52 @@ void sendFileMessage(AppContext &ctx,
     return;
   }
 
+  const String mimeType = detectFileMime(filePath);
+  const uint64_t metaTs = currentUnixMs();
+
+  const AgentAttachmentSendResult agentSend = sendAttachmentViaAgentRequest(
+      ctx,
+      filePath,
+      mimeType,
+      "file",
+      caption,
+      totalBytes,
+      backgroundTick);
+  if (agentSend == AgentAttachmentSendResult::Sent) {
+    file.close();
+
+    GatewayInboxMessage sent;
+    sent.id = makeMessageId("file");
+    sent.event = "agent.request";
+    sent.type = "file";
+    sent.from = kMessageSenderId;
+    sent.to = kDefaultSessionAgentId;
+    sent.text = caption;
+    sent.fileName = baseName(filePath);
+    sent.contentType = mimeType;
+    sent.voiceBytes = totalBytes;
+    sent.tsMs = metaTs;
+    pushOutbox(sent);
+
+    ctx.uiRuntime->showToast("File", "File sent", 1200, backgroundTick);
+    return;
+  }
+
   const uint16_t totalChunks = static_cast<uint16_t>(
       (totalBytes + static_cast<uint32_t>(kMessageChunkBytes) - 1U) /
       static_cast<uint32_t>(kMessageChunkBytes));
   const String messageId = makeMessageId("file");
-  const String mimeType = detectFileMime(filePath);
+  if (!ensureMessengerSessionSubscription(ctx, backgroundTick)) {
+    file.close();
+    return;
+  }
+  const String sessionKey = activeMessengerSessionKey();
 
   DynamicJsonDocument meta(2048);
   meta["id"] = messageId;
   meta["from"] = kMessageSenderId;
   meta["to"] = target;
+  meta["sessionKey"] = sessionKey;
   meta["type"] = "file";
   meta["fileName"] = baseName(filePath);
   meta["contentType"] = mimeType;
@@ -1165,7 +1405,6 @@ void sendFileMessage(AppContext &ctx,
   if (!caption.isEmpty()) {
     meta["text"] = caption;
   }
-  const uint64_t metaTs = currentUnixMs();
   if (metaTs > 0) {
     meta["ts"] = metaTs;
   }
@@ -1205,6 +1444,7 @@ void sendFileMessage(AppContext &ctx,
     chunk["id"] = messageId;
     chunk["from"] = kMessageSenderId;
     chunk["to"] = target;
+    chunk["sessionKey"] = sessionKey;
     chunk["seq"] = static_cast<uint32_t>(chunkIndex + 1);
     chunk["chunks"] = totalChunks;
     chunk["last"] = (chunkIndex + 1) >= totalChunks;

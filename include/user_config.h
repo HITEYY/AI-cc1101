@@ -54,6 +54,16 @@
 #define USER_BLE_AUDIO_SERVICE_UUID ""
 #define USER_BLE_AUDIO_CHAR_UUID ""
 
+// Audio playback output (I2S speaker / amp).
+// LilyGo T-Embed CC1101 example pinout:
+// BCLK=46, LRCLK=40, DOUT=7
+// Set pins to -1 to disable local audio playback output.
+#define USER_AUDIO_I2S_BCLK_PIN 46
+#define USER_AUDIO_I2S_LRCLK_PIN 40
+#define USER_AUDIO_I2S_DOUT_PIN 7
+// Range: 0~21
+#define USER_AUDIO_PLAYBACK_VOLUME 12
+
 // External module pins (change for your wiring)
 // PN532 NFC (I2C)
 #define USER_NFC_I2C_SDA 8

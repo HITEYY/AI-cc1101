@@ -323,9 +323,26 @@ bool GatewayClient::sendNodeEvent(const char *eventName, JsonDocument &payloadDo
   if (!gatewayReady_) {
     return false;
   }
-  StaticJsonDocument<2048> params;
+  size_t payloadLen = measureJson(payloadDoc);
+  if (payloadLen == 0) {
+    payloadLen = 2;  // "{}"
+  }
+
+  size_t paramsCapacity = payloadLen + 384U;
+  if (paramsCapacity < 768U) {
+    paramsCapacity = 768U;
+  }
+  if (paramsCapacity > kMaxGatewaySendFrameBytes) {
+    paramsCapacity = kMaxGatewaySendFrameBytes;
+  }
+
+  DynamicJsonDocument params(paramsCapacity);
   params["event"] = eventName;
   params["payload"] = payloadDoc.as<JsonVariantConst>();
+  if (params.overflowed()) {
+    lastError_ = "Gateway event payload too large";
+    return false;
+  }
   return sendRequest("node.event", params, nullptr);
 }
 
@@ -520,13 +537,30 @@ bool GatewayClient::sendRequest(const char *method,
     return false;
   }
 
-  DynamicJsonDocument frame(4096);
+  size_t paramsLen = measureJson(paramsDoc);
+  if (paramsLen == 0) {
+    paramsLen = 2;  // "{}"
+  }
+
+  size_t frameCapacity = paramsLen + 768U;
+  if (frameCapacity < 1024U) {
+    frameCapacity = 1024U;
+  }
+  if (frameCapacity > kMaxGatewaySendFrameBytes + 1024U) {
+    frameCapacity = kMaxGatewaySendFrameBytes + 1024U;
+  }
+
+  DynamicJsonDocument frame(frameCapacity);
   const String reqId = nextReqId("req");
 
   frame["type"] = "req";
   frame["id"] = reqId;
   frame["method"] = method;
   frame["params"] = paramsDoc.as<JsonVariantConst>();
+  if (frame.overflowed()) {
+    lastError_ = "Gateway send payload too large";
+    return false;
+  }
 
   const size_t bodyLen = measureJson(frame);
   if (bodyLen == 0 || bodyLen >= kMaxGatewaySendFrameBytes) {

@@ -6,7 +6,7 @@ LilyGo T-Embed CC1101 보드를 OpenClaw Remote Gateway에 `node`로 연결하�
 
 - `OpenClaw` 앱: 상태 확인 + Gateway 설정 + Messenger(채팅/파일/음성) + Save & Apply + Connect/Disconnect/Reconnect
 - `Setting` 앱: Wi-Fi 설정 + BLE 스캔/연결/저장(재접속 대상) + System(Device Name/UI/Timezone/Factory Reset) + Firmware Update(독립 업데이트 메뉴)
-- `File Explorer` 앱: SD 카드 마운트/용량 확인/디렉토리 탐색/텍스트 미리보기/Quick Format
+- `File Explorer` 앱: SD 카드 마운트/용량 확인/디렉토리 탐색/텍스트 미리보기/이미지 보기(png/jpg/jpeg/bmp)/오디오 재생(wav/mp3/ogg 등)/Quick Format
 - `APPMarket` 앱: GitHub 최신 릴리스 조회/다운로드 + SD 패키지 관리 + 펌웨어 설치/재설치/백업
 - `RF` 앱: CC1101 고급 설정(변조/채널/속도/편이/대역폭/패킷) + 패킷 TX/RX + RSSI + OOK TX
 - `NFC` 앱: PN532(I2C) 모듈 감지 + 태그 UID 스캔

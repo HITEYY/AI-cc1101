@@ -1,7 +1,9 @@
 #include "file_explorer_app.h"
 
+#include <Audio.h>
 #include <SD.h>
 #include <SPI.h>
+#include <lvgl.h>
 
 #include <algorithm>
 #include <vector>
@@ -225,6 +227,57 @@ String sanitizeTextLine(const String &input) {
   return out;
 }
 
+bool isImageFilePath(const String &path) {
+  String lower = path;
+  lower.toLowerCase();
+  return lower.endsWith(".png") ||
+         lower.endsWith(".jpg") ||
+         lower.endsWith(".jpeg") ||
+         lower.endsWith(".jeg") ||
+         lower.endsWith(".bmp");
+}
+
+bool isAudioFilePath(const String &path) {
+  String lower = path;
+  lower.toLowerCase();
+  return lower.endsWith(".wav") ||
+         lower.endsWith(".mp3") ||
+         lower.endsWith(".ogg") ||
+         lower.endsWith(".aac") ||
+         lower.endsWith(".m4a") ||
+         lower.endsWith(".flac");
+}
+
+String toLvglSdPath(const String &sdPath) {
+  if (sdPath.startsWith("/")) {
+    return String("S:") + sdPath;
+  }
+  return String("S:/") + sdPath;
+}
+
+String formatDurationSeconds(uint32_t totalSec) {
+  const uint32_t hours = totalSec / 3600U;
+  const uint32_t mins = (totalSec % 3600U) / 60U;
+  const uint32_t secs = totalSec % 60U;
+
+  char buf[20];
+  if (hours > 0U) {
+    snprintf(buf,
+             sizeof(buf),
+             "%lu:%02lu:%02lu",
+             static_cast<unsigned long>(hours),
+             static_cast<unsigned long>(mins),
+             static_cast<unsigned long>(secs));
+  } else {
+    snprintf(buf,
+             sizeof(buf),
+             "%lu:%02lu",
+             static_cast<unsigned long>(mins),
+             static_cast<unsigned long>(secs));
+  }
+  return String(buf);
+}
+
 void showFileInfo(AppContext &ctx,
                   const FsEntry &entry,
                   const std::function<void()> &backgroundTick) {
@@ -280,15 +333,229 @@ void previewTextFile(AppContext &ctx,
   ctx.uiRuntime->showInfo("File Preview", lines, backgroundTick, "OK/BACK Exit");
 }
 
+void viewImageFile(AppContext &ctx,
+                   const FsEntry &entry,
+                   const std::function<void()> &backgroundTick) {
+  const String lvPath = toLvglSdPath(entry.fullPath);
+
+  lv_image_header_t header;
+  if (lv_image_decoder_get_info(lvPath.c_str(), &header) != LV_RESULT_OK) {
+    ctx.uiRuntime->showToast("Image",
+                             "Unsupported image format",
+                             1700,
+                             backgroundTick);
+    return;
+  }
+
+  lv_obj_t *screen = lv_screen_active();
+  if (!screen) {
+    ctx.uiRuntime->showToast("Image", "Display not ready", 1400, backgroundTick);
+    return;
+  }
+
+  lv_obj_clean(screen);
+  lv_obj_set_style_bg_color(screen, lv_color_hex(0x000000), 0);
+  lv_obj_set_style_bg_opa(screen, LV_OPA_COVER, 0);
+
+  lv_obj_t *nameLabel = lv_label_create(screen);
+  const String fileName = trimMiddle(baseName(entry.fullPath), 34);
+  lv_label_set_text(nameLabel, fileName.c_str());
+  lv_obj_set_style_text_color(nameLabel, lv_color_white(), 0);
+  lv_obj_align(nameLabel, LV_ALIGN_TOP_MID, 0, 2);
+
+  lv_obj_t *metaLabel = lv_label_create(screen);
+  const String meta = String(static_cast<unsigned long>(header.w)) + "x" +
+                      String(static_cast<unsigned long>(header.h));
+  lv_label_set_text(metaLabel, meta.c_str());
+  lv_obj_set_style_text_color(metaLabel, lv_color_hex(0xB0B0B0), 0);
+  lv_obj_align(metaLabel, LV_ALIGN_TOP_MID, 0, 18);
+
+  lv_obj_t *hintLabel = lv_label_create(screen);
+  lv_label_set_text(hintLabel, "OK/BACK Exit");
+  lv_obj_set_style_text_color(hintLabel, lv_color_hex(0x9A9A9A), 0);
+  lv_obj_align(hintLabel, LV_ALIGN_BOTTOM_MID, 0, -2);
+
+  lv_obj_t *image = lv_image_create(screen);
+  lv_image_set_src(image, lvPath.c_str());
+  lv_image_set_inner_align(image, LV_IMAGE_ALIGN_CENTER);
+
+  lv_display_t *display = lv_display_get_default();
+  const int screenW = display ? lv_display_get_horizontal_resolution(display) : 320;
+  const int screenH = display ? lv_display_get_vertical_resolution(display) : 170;
+  const int viewportW = std::max(1, screenW - 8);
+  const int viewportH = std::max(1, screenH - 52);
+
+  uint32_t zoom = 256U;
+  if (header.w > 0U && header.h > 0U) {
+    const uint32_t zx = static_cast<uint32_t>(
+        (static_cast<uint64_t>(viewportW) * 256ULL) / static_cast<uint64_t>(header.w));
+    const uint32_t zy = static_cast<uint32_t>(
+        (static_cast<uint64_t>(viewportH) * 256ULL) / static_cast<uint64_t>(header.h));
+    zoom = std::min(zx, zy);
+    if (zoom > 256U) {
+      zoom = 256U;
+    }
+    if (zoom < 8U) {
+      zoom = 8U;
+    }
+  }
+  lv_image_set_scale(image, zoom);
+  lv_obj_align(image, LV_ALIGN_CENTER, 0, 8);
+
+  ctx.uiRuntime->resetInputState();
+  while (true) {
+    ctx.uiRuntime->tick();
+    const UiEvent ev = ctx.uiRuntime->pollInput();
+    if (ev.back || ev.ok || ev.okLong) {
+      break;
+    }
+    if (backgroundTick) {
+      backgroundTick();
+    }
+    delay(4);
+  }
+  ctx.uiRuntime->resetInputState();
+}
+
+void playAudioFile(AppContext &ctx,
+                   const FsEntry &entry,
+                   const std::function<void()> &backgroundTick) {
+#if USER_AUDIO_I2S_BCLK_PIN < 0 || USER_AUDIO_I2S_LRCLK_PIN < 0 || \
+    USER_AUDIO_I2S_DOUT_PIN < 0
+  ctx.uiRuntime->showToast("Audio",
+                           "I2S output pins are disabled",
+                           1800,
+                           backgroundTick);
+  return;
+#else
+  Audio audio;
+  audio.setPinout(USER_AUDIO_I2S_BCLK_PIN,
+                  USER_AUDIO_I2S_LRCLK_PIN,
+                  USER_AUDIO_I2S_DOUT_PIN);
+  audio.setVolume(std::max(0, std::min(21, USER_AUDIO_PLAYBACK_VOLUME)));
+
+  if (!audio.connecttoFS(SD, entry.fullPath.c_str())) {
+    ctx.uiRuntime->showToast("Audio", "Playback start failed", 1700, backgroundTick);
+    return;
+  }
+
+  lv_obj_t *screen = lv_screen_active();
+  if (!screen) {
+    audio.stopSong();
+    ctx.uiRuntime->showToast("Audio", "Display not ready", 1400, backgroundTick);
+    return;
+  }
+
+  lv_obj_clean(screen);
+  lv_obj_set_style_bg_color(screen, lv_color_hex(0x07090C), 0);
+  lv_obj_set_style_bg_opa(screen, LV_OPA_COVER, 0);
+
+  lv_obj_t *nameLabel = lv_label_create(screen);
+  const String fileName = trimMiddle(baseName(entry.fullPath), 34);
+  lv_label_set_text(nameLabel, fileName.c_str());
+  lv_obj_set_style_text_color(nameLabel, lv_color_white(), 0);
+  lv_obj_align(nameLabel, LV_ALIGN_TOP_MID, 0, 4);
+
+  lv_obj_t *stateLabel = lv_label_create(screen);
+  lv_label_set_text(stateLabel, "Playing");
+  lv_obj_set_style_text_color(stateLabel, lv_color_hex(0x7BE07B), 0);
+  lv_obj_align(stateLabel, LV_ALIGN_CENTER, 0, -14);
+
+  lv_obj_t *timeLabel = lv_label_create(screen);
+  lv_label_set_text(timeLabel, "0:00");
+  lv_obj_set_style_text_color(timeLabel, lv_color_hex(0xD4DCE8), 0);
+  lv_obj_align(timeLabel, LV_ALIGN_CENTER, 0, 10);
+
+  lv_obj_t *hintLabel = lv_label_create(screen);
+  lv_label_set_text(hintLabel, "OK Pause/Resume  BACK Exit");
+  lv_obj_set_style_text_color(hintLabel, lv_color_hex(0x9AA6B8), 0);
+  lv_obj_align(hintLabel, LV_ALIGN_BOTTOM_MID, 0, -4);
+
+  bool paused = false;
+  bool exitRequested = false;
+  unsigned long lastUiUpdateMs = 0;
+  ctx.uiRuntime->resetInputState();
+
+  while (!exitRequested) {
+    audio.loop();
+    ctx.uiRuntime->tick();
+
+    const UiEvent ev = ctx.uiRuntime->pollInput();
+    if (ev.back || ev.okLong) {
+      exitRequested = true;
+    } else if (ev.ok) {
+      paused = audio.pauseResume();
+      lv_label_set_text(stateLabel, paused ? "Paused" : "Playing");
+      lv_obj_set_style_text_color(stateLabel,
+                                  paused ? lv_color_hex(0xF4CE6A) : lv_color_hex(0x7BE07B),
+                                  0);
+    }
+
+    const unsigned long now = millis();
+    if (lastUiUpdateMs == 0 || now - lastUiUpdateMs >= 200UL) {
+      lastUiUpdateMs = now;
+      const uint32_t currentSec = audio.getAudioCurrentTime();
+      const uint32_t durationSec = audio.getAudioFileDuration();
+      String line = formatDurationSeconds(currentSec);
+      if (durationSec > 0U) {
+        line += " / ";
+        line += formatDurationSeconds(durationSec);
+      }
+      lv_label_set_text(timeLabel, line.c_str());
+    }
+
+    if (!audio.isRunning()) {
+      break;
+    }
+
+    if (backgroundTick) {
+      backgroundTick();
+    }
+    delay(4);
+  }
+
+  const bool endedNaturally = !exitRequested && !audio.isRunning();
+  audio.stopSong();
+  ctx.uiRuntime->resetInputState();
+
+  if (endedNaturally) {
+    ctx.uiRuntime->showToast("Audio", "Playback completed", 900, backgroundTick);
+  }
+#endif
+}
+
 void runFileMenu(AppContext &ctx,
                  const FsEntry &entry,
                  const std::function<void()> &backgroundTick) {
   int selected = 0;
 
   while (true) {
+    const bool imageFile = isImageFilePath(entry.fullPath);
+    const bool audioFile = isAudioFilePath(entry.fullPath);
+
+    int actionInfo = -1;
+    int actionViewImage = -1;
+    int actionPlayAudio = -1;
+    int actionPreviewText = -1;
+    int actionBack = -1;
+
     std::vector<String> menu;
+    actionInfo = static_cast<int>(menu.size());
     menu.push_back("Info");
+
+    if (imageFile) {
+      actionViewImage = static_cast<int>(menu.size());
+      menu.push_back("View Image");
+    }
+    if (audioFile) {
+      actionPlayAudio = static_cast<int>(menu.size());
+      menu.push_back("Play Audio");
+    }
+
+    actionPreviewText = static_cast<int>(menu.size());
     menu.push_back("Preview Text");
+
+    actionBack = static_cast<int>(menu.size());
     menu.push_back("Back");
 
     const String subtitle = trimMiddle(baseName(entry.fullPath), 24);
@@ -298,14 +565,18 @@ void runFileMenu(AppContext &ctx,
                                         backgroundTick,
                                         "OK Select  BACK Exit",
                                         subtitle);
-    if (choice < 0 || choice == 2) {
+    if (choice < 0 || choice == actionBack) {
       return;
     }
 
     selected = choice;
-    if (choice == 0) {
+    if (choice == actionInfo) {
       showFileInfo(ctx, entry, backgroundTick);
-    } else if (choice == 1) {
+    } else if (choice == actionViewImage) {
+      viewImageFile(ctx, entry, backgroundTick);
+    } else if (choice == actionPlayAudio) {
+      playAudioFile(ctx, entry, backgroundTick);
+    } else if (choice == actionPreviewText) {
       previewTextFile(ctx, entry, backgroundTick);
     }
   }

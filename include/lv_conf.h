@@ -67,6 +67,15 @@
 #define LV_USE_FLEX 1
 #define LV_USE_GRID 0
 
+/* File system/image decoders for SD media preview */
+#define LV_USE_FS_ARDUINO_SD 1
+#define LV_FS_ARDUINO_SD_LETTER 'S'
+#define LV_FS_ARDUINO_SD_PATH "/sd"
+
+#define LV_USE_LODEPNG 1
+#define LV_USE_TJPGD 1
+#define LV_USE_BMP 1
+
 /* Examples / demos */
 #define LV_BUILD_EXAMPLES 0
 #define LV_USE_DEMO_WIDGETS 0
