@@ -58,7 +58,7 @@ String trimDeviceName(String value) {
 String defaultDeviceNameValue() {
   String name = trimDeviceName(String(USER_OPENCLAW_DISPLAY_NAME));
   if (name.isEmpty()) {
-    name = "OpenClaw Node";
+    name = "ZX-OS Node";
   }
   return name;
 }
