@@ -4,6 +4,7 @@
 #include <Wire.h>
 #include <driver/rtc_io.h>
 #include <esp_heap_caps.h>
+#include <esp_reset_reason.h>
 #include <esp_sleep.h>
 
 #define XPOWERS_CHIP_BQ25896
@@ -20,6 +21,11 @@
 #include "ui/i18n.h"
 #include "ui/ui_navigator.h"
 #include "ui/ui_runtime.h"
+
+// RTC memory persists across software resets (ESP.restart()), allowing the
+// firmware to communicate a reboot reason to the next boot.
+RTC_DATA_ATTR static char gRtcRebootReason[72] = {};
+RTC_DATA_ATTR static bool gRtcRebootReasonSet = false;
 
 namespace {
 
@@ -40,6 +46,30 @@ constexpr unsigned long kRamWatchPollMs = 1000UL;
 constexpr uint8_t kRamWatchRebootPercent = 100U;
 constexpr uint8_t kBacklightFullDuty = 254U;
 constexpr unsigned long kMemTraceLogMs = 5000UL;
+
+// Returns a user-visible description for hardware-level reset reasons that
+// indicate a system problem.  Returns nullptr for normal (non-problem) resets.
+const char *systemProblemResetReason(esp_reset_reason_t reason) {
+  switch (reason) {
+    case ESP_RST_PANIC:    return "크래시 (패닉)";
+    case ESP_RST_INT_WDT:  return "인터럽트 와치독 타임아웃";
+    case ESP_RST_TASK_WDT: return "태스크 와치독 타임아웃";
+    case ESP_RST_WDT:      return "와치독 타임아웃";
+    case ESP_RST_BROWNOUT: return "전압 저하 (브라운아웃)";
+    default:               return nullptr;
+  }
+}
+
+void saveRtcRebootReason(const char *reason) {
+  strncpy(gRtcRebootReason, reason, sizeof(gRtcRebootReason) - 1);
+  gRtcRebootReason[sizeof(gRtcRebootReason) - 1] = '\0';
+  gRtcRebootReasonSet = true;
+}
+
+void clearRtcRebootReason() {
+  gRtcRebootReason[0] = '\0';
+  gRtcRebootReasonSet = false;
+}
 
 uint8_t heapUsedPercent(uint32_t caps) {
   const uint32_t total = heap_caps_get_total_size(caps);
@@ -94,6 +124,7 @@ void tickRamWatchdog() {
                 static_cast<unsigned int>(internalPct),
                 static_cast<unsigned int>(psramPct));
   Serial.flush();
+  saveRtcRebootReason("메모리 부족 (RAM 워치독)");
   ESP.restart();
 }
 
@@ -230,9 +261,23 @@ void setup() {
   delay(400);
 
   const esp_sleep_wakeup_cause_t wakeCause = esp_sleep_get_wakeup_cause();
+  const esp_reset_reason_t resetReason = esp_reset_reason();
   Serial.println("[boot] start");
   if (wakeCause == ESP_SLEEP_WAKEUP_EXT0) {
     Serial.println("[boot] wake source: top button");
+  }
+  Serial.printf("[boot] reset reason: %d\n", static_cast<int>(resetReason));
+
+  // Collect reboot reason to show after splash if applicable.
+  // Priority: hardware crash reason > RTC-saved software reason.
+  String rebootReasonMsg;
+  const char *hwReason = systemProblemResetReason(resetReason);
+  if (hwReason) {
+    rebootReasonMsg = hwReason;
+    clearRtcRebootReason();
+  } else if (gRtcRebootReasonSet && gRtcRebootReason[0] != '\0') {
+    rebootReasonMsg = gRtcRebootReason;
+    clearRtcRebootReason();
   }
 
   // Keep shared SPI devices deselected before any peripheral init.
@@ -248,6 +293,18 @@ void setup() {
   Serial.println("[boot] ui.begin()");
   gUiRuntime.begin();
   gSleepDetectionArmed = digitalRead(boardpins::kEncoderBack) == HIGH;
+
+  // Boot splash: show ZX-OS branding on every startup.
+  // Waking from deep sleep skips the full splash to reduce latency.
+  if (wakeCause != ESP_SLEEP_WAKEUP_EXT0) {
+    gUiRuntime.showBootSplash("", 1400, []() {});
+  }
+
+  // If the previous boot ended due to a system problem, show the reason.
+  if (rebootReasonMsg.length() > 0) {
+    Serial.printf("[boot] previous reboot reason: %s\n", rebootReasonMsg.c_str());
+    gUiRuntime.showToast("재부팅 원인", rebootReasonMsg, 3000, []() {});
+  }
 
   Serial.println("[boot] cc1101.init()");
   const bool ccReady = initCc1101Radio();
