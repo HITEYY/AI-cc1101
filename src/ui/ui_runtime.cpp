@@ -2141,6 +2141,55 @@ class UiRuntime::Impl {
     clearProgressHandles();
     service(nullptr);
   }
+
+  void renderBootSplash(const String &subtitle) {
+    lv_obj_t *screen = lv_screen_active();
+    clearProgressHandles();
+    clearTextInputHandles();
+    lv_obj_clean(screen);
+    disableScroll(screen);
+    lv_obj_set_style_bg_color(screen, lv_color_hex(kClrBg), 0);
+    lv_obj_set_style_bg_opa(screen, LV_OPA_COVER, 0);
+    lv_obj_set_style_text_opa(screen, LV_OPA_COVER, 0);
+
+    const int w = lv_display_get_horizontal_resolution(port.display());
+    const int h = lv_display_get_vertical_resolution(port.display());
+
+    // Accent border line at top
+    lv_obj_t *topLine = lv_obj_create(screen);
+    disableScroll(topLine);
+    lv_obj_remove_style_all(topLine);
+    lv_obj_set_size(topLine, w, 3);
+    lv_obj_set_pos(topLine, 0, 0);
+    lv_obj_set_style_bg_color(topLine, lv_color_hex(kClrAccent), 0);
+    lv_obj_set_style_bg_opa(topLine, LV_OPA_COVER, 0);
+
+    // "ZX-OS" logo label - use montserrat 18 for larger ASCII-only branding
+    lv_obj_t *logoLabel = lv_label_create(screen);
+    lv_obj_set_style_text_font(logoLabel, &lv_font_montserrat_18, 0);
+    lv_obj_set_style_text_color(logoLabel, lv_color_hex(kClrAccent), 0);
+    lv_obj_set_style_text_opa(logoLabel, LV_OPA_COVER, 0);
+    lv_label_set_text(logoLabel, "ZX-OS");
+    lv_obj_set_width(logoLabel, w - 16);
+    lv_obj_set_style_text_align(logoLabel, LV_TEXT_ALIGN_CENTER, 0);
+
+    const int logoY = subtitle.length() > 0 ? (h / 2) - 22 : (h / 2) - 10;
+    lv_obj_set_pos(logoLabel, 8, logoY);
+
+    if (subtitle.length() > 0) {
+      lv_obj_t *subLabel = lv_label_create(screen);
+      setLabelFont(subLabel);
+      lv_obj_set_style_text_color(subLabel, lv_color_hex(kClrTextMuted), 0);
+      lv_obj_set_style_text_opa(subLabel, LV_OPA_COVER, 0);
+      lv_obj_set_width(subLabel, w - 16);
+      lv_obj_set_style_text_align(subLabel, LV_TEXT_ALIGN_CENTER, 0);
+      lv_label_set_long_mode(subLabel, LV_LABEL_LONG_WRAP);
+      lv_label_set_text(subLabel, subtitle.c_str());
+      lv_obj_set_pos(subLabel, 8, logoY + 28);
+    }
+
+    service(nullptr);
+  }
 };
 
 UiRuntime::UiRuntime() : impl_(new Impl()) {}
@@ -2842,6 +2891,28 @@ void UiRuntime::showToast(const String &title,
     impl_->service(&backgroundTick);
     UiEvent ev = pollInput();
     if (ev.ok || ev.back || now - start >= showMs) {
+      return;
+    }
+
+    delay(kUiLoopDelayMs);
+  }
+}
+
+void UiRuntime::showBootSplash(const String &subtitle,
+                               unsigned long durationMs,
+                               const std::function<void()> &backgroundTick) {
+  const unsigned long start = millis();
+  bool rendered = false;
+
+  while (true) {
+    if (!rendered) {
+      impl_->renderBootSplash(subtitle);
+      rendered = true;
+    }
+
+    impl_->service(&backgroundTick);
+    UiEvent ev = pollInput();
+    if (ev.ok || ev.back || millis() - start >= durationMs) {
       return;
     }
 

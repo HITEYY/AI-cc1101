@@ -98,6 +98,10 @@ class UiRuntime {
                  unsigned long showMs,
                  const std::function<void()> &backgroundTick);
 
+  void showBootSplash(const String &subtitle,
+                      unsigned long durationMs,
+                      const std::function<void()> &backgroundTick);
+
  private:
   class Impl;
   Impl *impl_;
