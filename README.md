@@ -16,6 +16,16 @@ It combines a launcher-based LVGL UI with wireless tooling, OpenClaw gateway int
 > - `docs/FEATURES.md`
 > - `docs/APP_DEVELOPMENT_GUIDE.md`
 
+## Web Flusher
+
+브라우저에서 바로 릴리즈된 ZX-OS 펌웨어를 장치에 플래시할 수 있습니다.
+
+- **파일**: [`web-flusher/index.html`](web-flusher/index.html)
+- **요구사항**: Chrome / Edge (데스크톱) — Web Serial API 지원 브라우저
+- 별도 설치 없이 GitHub 릴리즈 목록에서 버전을 선택하고 USB로 연결된 장치에 바로 플래시합니다.
+
+> GitHub Pages 또는 로컬 HTTP 서버(예: `python3 -m http.server`)로 열어서 사용하세요.
+
 ## Quick start
 
 ### 1) Build

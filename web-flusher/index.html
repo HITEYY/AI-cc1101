@@ -1,0 +1,811 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>ZX-OS Web Flusher</title>
+  <script type="module" src="https://unpkg.com/esp-web-tools@10/dist/web/install-button.js?module"></script>
+  <style>
+    :root {
+      --bg:           #08090e;
+      --surface:      #101118;
+      --surface-2:    #181921;
+      --border:       #1e2030;
+      --border-hi:    #2e3050;
+      --accent:       #7c3aed;
+      --accent-hi:    #9d5ef0;
+      --accent-glow:  rgba(124, 58, 237, 0.25);
+      --green:        #22c55e;
+      --red:          #ef4444;
+      --yellow:       #eab308;
+      --text:         #e2e4f0;
+      --text-muted:   #6b7080;
+      --text-dim:     #9aa0b8;
+      --mono:         'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace;
+    }
+
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: var(--mono);
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+    }
+
+    /* ───── HEADER ───── */
+    header {
+      width: 100%;
+      padding: 32px 24px 28px;
+      text-align: center;
+      border-bottom: 1px solid var(--border);
+      background: linear-gradient(180deg, rgba(124,58,237,.06) 0%, transparent 100%);
+    }
+
+    .logo {
+      font-size: 2.4rem;
+      font-weight: 800;
+      letter-spacing: -1px;
+      line-height: 1;
+      color: var(--text);
+      margin-bottom: 6px;
+    }
+    .logo span { color: var(--accent-hi); }
+
+    header h1 {
+      font-size: .95rem;
+      font-weight: 400;
+      color: var(--text-muted);
+      letter-spacing: .15em;
+      text-transform: uppercase;
+    }
+
+    /* ───── NOTICE BANNER ───── */
+    .banner {
+      width: 100%;
+      max-width: 760px;
+      margin: 24px auto 0;
+      padding: 12px 18px;
+      border-radius: 8px;
+      font-size: .78rem;
+      display: flex;
+      gap: 10px;
+      align-items: flex-start;
+    }
+    .banner.warn {
+      background: rgba(234,179,8,.08);
+      border: 1px solid rgba(234,179,8,.25);
+      color: #fde68a;
+    }
+    .banner.info {
+      background: rgba(124,58,237,.08);
+      border: 1px solid rgba(124,58,237,.22);
+      color: var(--text-dim);
+    }
+    .banner .icon { flex-shrink: 0; font-size: .95rem; margin-top: 1px; }
+
+    /* ───── MAIN LAYOUT ───── */
+    main {
+      width: 100%;
+      max-width: 760px;
+      padding: 28px 16px 60px;
+      display: flex;
+      flex-direction: column;
+      gap: 24px;
+    }
+
+    /* ───── CARD ───── */
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      overflow: hidden;
+    }
+
+    .card-header {
+      padding: 14px 20px;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .step-badge {
+      width: 24px;
+      height: 24px;
+      border-radius: 50%;
+      background: var(--accent);
+      color: #fff;
+      font-size: .72rem;
+      font-weight: 700;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+    }
+    .step-badge.done { background: var(--green); }
+    .step-badge.locked { background: var(--border-hi); color: var(--text-muted); }
+
+    .card-header h2 {
+      font-size: .9rem;
+      font-weight: 600;
+      color: var(--text);
+    }
+
+    .card-body { padding: 20px; }
+
+    /* ───── RELEASE LIST ───── */
+    #release-list {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+
+    .skeleton {
+      height: 64px;
+      background: linear-gradient(90deg, var(--surface-2) 25%, var(--border) 50%, var(--surface-2) 75%);
+      background-size: 200% 100%;
+      animation: shimmer 1.4s infinite;
+      border-radius: 8px;
+    }
+    @keyframes shimmer { to { background-position: -200% 0; } }
+
+    .release-item {
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 12px 16px;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      transition: border-color .15s, background .15s;
+      background: var(--surface-2);
+    }
+    .release-item:hover { border-color: var(--accent); background: rgba(124,58,237,.06); }
+    .release-item.selected {
+      border-color: var(--accent);
+      background: rgba(124,58,237,.12);
+      box-shadow: 0 0 0 1px var(--accent);
+    }
+    .release-item.no-asset { opacity: .45; cursor: not-allowed; }
+    .release-item.no-asset:hover { border-color: var(--border); background: var(--surface-2); }
+
+    .ri-radio {
+      width: 16px; height: 16px;
+      border-radius: 50%;
+      border: 2px solid var(--border-hi);
+      flex-shrink: 0;
+      display: flex; align-items: center; justify-content: center;
+      transition: border-color .15s;
+    }
+    .release-item.selected .ri-radio { border-color: var(--accent); }
+    .ri-radio::after {
+      content: '';
+      width: 7px; height: 7px;
+      border-radius: 50%;
+      background: var(--accent);
+      opacity: 0;
+      transition: opacity .15s;
+    }
+    .release-item.selected .ri-radio::after { opacity: 1; }
+
+    .ri-info { flex: 1; min-width: 0; }
+    .ri-tag {
+      font-size: .88rem;
+      font-weight: 600;
+      color: var(--text);
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .badge {
+      font-size: .65rem;
+      padding: 1px 7px;
+      border-radius: 999px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: .05em;
+    }
+    .badge.latest  { background: rgba(34,197,94,.18);  color: #86efac; border: 1px solid rgba(34,197,94,.3); }
+    .badge.pre     { background: rgba(234,179,8,.15); color: #fde68a; border: 1px solid rgba(234,179,8,.3); }
+    .badge.no-bin  { background: rgba(107,112,128,.15); color: var(--text-muted); border: 1px solid var(--border-hi); }
+
+    .ri-meta {
+      font-size: .73rem;
+      color: var(--text-muted);
+      margin-top: 3px;
+    }
+
+    .ri-size {
+      font-size: .78rem;
+      color: var(--text-dim);
+      flex-shrink: 0;
+    }
+
+    /* ───── SELECTED INFO ───── */
+    #selected-info {
+      display: none;
+      margin-top: 16px;
+      background: var(--surface-2);
+      border: 1px solid var(--border-hi);
+      border-radius: 8px;
+      padding: 14px 16px;
+      font-size: .78rem;
+      color: var(--text-dim);
+    }
+    #selected-info.visible { display: block; }
+    #selected-info table { border-collapse: collapse; width: 100%; }
+    #selected-info td { padding: 3px 0; }
+    #selected-info td:first-child { color: var(--text-muted); width: 120px; }
+    #selected-info td:last-child { color: var(--text); font-family: var(--mono); word-break: break-all; }
+
+    /* ───── NOTES ───── */
+    #release-notes {
+      display: none;
+      margin-top: 12px;
+      background: var(--surface-2);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 14px 16px;
+      font-size: .77rem;
+      color: var(--text-dim);
+      max-height: 160px;
+      overflow-y: auto;
+      line-height: 1.6;
+      white-space: pre-wrap;
+    }
+    #release-notes.visible { display: block; }
+    #release-notes::-webkit-scrollbar { width: 4px; }
+    #release-notes::-webkit-scrollbar-track { background: transparent; }
+    #release-notes::-webkit-scrollbar-thumb { background: var(--border-hi); border-radius: 4px; }
+
+    /* ───── FLASH SECTION ───── */
+    .device-guide {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      margin-bottom: 20px;
+    }
+
+    .guide-step {
+      display: flex;
+      gap: 12px;
+      align-items: flex-start;
+      font-size: .82rem;
+      color: var(--text-dim);
+    }
+    .guide-num {
+      width: 22px; height: 22px;
+      border-radius: 50%;
+      background: var(--surface-2);
+      border: 1px solid var(--border-hi);
+      color: var(--text-muted);
+      font-size: .7rem;
+      font-weight: 700;
+      display: flex; align-items: center; justify-content: center;
+      flex-shrink: 0;
+    }
+
+    .flash-controls {
+      display: flex;
+      flex-direction: column;
+      align-items: flex-start;
+      gap: 14px;
+    }
+
+    /* esp-web-tools custom styling */
+    esp-web-install-button {
+      --esp-tools-button-color: var(--accent);
+      --esp-tools-button-text-color: #fff;
+    }
+
+    /* Override esp-web-tools button look */
+    esp-web-install-button::part(button) {
+      background: var(--accent);
+      color: #fff;
+      border: none;
+      border-radius: 8px;
+      padding: 10px 24px;
+      font-family: var(--mono);
+      font-size: .85rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background .15s, box-shadow .15s;
+      letter-spacing: .04em;
+    }
+    esp-web-install-button::part(button):hover {
+      background: var(--accent-hi);
+      box-shadow: 0 0 14px var(--accent-glow);
+    }
+
+    #flash-placeholder {
+      display: flex;
+      flex-direction: column;
+      align-items: flex-start;
+      gap: 10px;
+    }
+
+    .btn-flash-disabled {
+      background: var(--surface-2);
+      border: 1px solid var(--border-hi);
+      color: var(--text-muted);
+      border-radius: 8px;
+      padding: 10px 24px;
+      font-family: var(--mono);
+      font-size: .85rem;
+      font-weight: 600;
+      cursor: not-allowed;
+      letter-spacing: .04em;
+    }
+
+    #no-browser-support {
+      display: none;
+      padding: 12px 16px;
+      background: rgba(239,68,68,.08);
+      border: 1px solid rgba(239,68,68,.25);
+      border-radius: 8px;
+      font-size: .8rem;
+      color: #fca5a5;
+    }
+
+    /* ───── SHA256 VERIFY ───── */
+    #sha-status {
+      font-size: .75rem;
+      padding: 8px 14px;
+      border-radius: 6px;
+      display: none;
+      align-items: center;
+      gap: 8px;
+    }
+    #sha-status.checking { display: flex; background: rgba(124,58,237,.08); color: var(--text-dim); border: 1px solid var(--border-hi); }
+    #sha-status.ok       { display: flex; background: rgba(34,197,94,.08);  color: #86efac; border: 1px solid rgba(34,197,94,.25); }
+    #sha-status.fail     { display: flex; background: rgba(239,68,68,.08);  color: #fca5a5; border: 1px solid rgba(239,68,68,.25); }
+
+    /* ───── FOOTER ───── */
+    footer {
+      margin-top: auto;
+      padding: 20px;
+      font-size: .72rem;
+      color: var(--text-muted);
+      text-align: center;
+      border-top: 1px solid var(--border);
+      width: 100%;
+    }
+    footer a { color: var(--accent-hi); text-decoration: none; }
+    footer a:hover { text-decoration: underline; }
+
+    /* ───── ERROR STATE ───── */
+    .error-box {
+      padding: 16px;
+      background: rgba(239,68,68,.08);
+      border: 1px solid rgba(239,68,68,.2);
+      border-radius: 8px;
+      font-size: .82rem;
+      color: #fca5a5;
+    }
+
+    /* ───── RESPONSIVE ───── */
+    @media (max-width: 500px) {
+      .ri-size { display: none; }
+      main { padding: 20px 12px 40px; }
+    }
+  </style>
+</head>
+<body>
+
+<!-- ═══════════════════════ HEADER ═══════════════════════ -->
+<header>
+  <div class="logo">ZX<span>-OS</span></div>
+  <h1>Web Flusher</h1>
+</header>
+
+<!-- ═══════════════════════ MAIN ═══════════════════════ -->
+<main>
+
+  <!-- 브라우저 지원 경고 -->
+  <div class="banner warn" id="compat-banner" style="display:none">
+    <span class="icon">⚠</span>
+    <span>
+      Web Serial API는 <strong>Chrome / Edge / Opera</strong> (데스크톱) 에서만 지원됩니다.
+      현재 브라우저에서는 플래싱이 불가합니다.
+    </span>
+  </div>
+
+  <!-- 안내 배너 -->
+  <div class="banner info">
+    <span class="icon">ℹ</span>
+    <span>
+      릴리즈된 ZX-OS 펌웨어를 USB로 연결된 T-Embed CC1101 장치에 직접 플래시합니다.
+      기존 설정(WiFi, OpenClaw 등)은 NVS에 보존됩니다.
+    </span>
+  </div>
+
+  <!-- ─── STEP 1: 릴리즈 선택 ─── -->
+  <div class="card">
+    <div class="card-header">
+      <div class="step-badge" id="step1-badge">1</div>
+      <h2>릴리즈 선택</h2>
+    </div>
+    <div class="card-body">
+      <div id="release-list">
+        <!-- skeleton while loading -->
+        <div class="skeleton"></div>
+        <div class="skeleton" style="opacity:.7"></div>
+        <div class="skeleton" style="opacity:.45"></div>
+      </div>
+
+      <!-- 선택된 릴리즈 상세 -->
+      <div id="selected-info">
+        <table>
+          <tr>
+            <td>버전</td>
+            <td id="si-version">—</td>
+          </tr>
+          <tr>
+            <td>파일명</td>
+            <td id="si-filename">—</td>
+          </tr>
+          <tr>
+            <td>크기</td>
+            <td id="si-size">—</td>
+          </tr>
+          <tr>
+            <td>SHA-256</td>
+            <td id="si-sha">—</td>
+          </tr>
+          <tr>
+            <td>Flash 오프셋</td>
+            <td>0x10000 (app partition)</td>
+          </tr>
+        </table>
+      </div>
+
+      <!-- 릴리즈 노트 -->
+      <div id="release-notes"></div>
+    </div>
+  </div>
+
+  <!-- ─── STEP 2: 연결 및 플래시 ─── -->
+  <div class="card" id="flash-card">
+    <div class="card-header">
+      <div class="step-badge locked" id="step2-badge">2</div>
+      <h2>장치 연결 및 플래시</h2>
+    </div>
+    <div class="card-body">
+      <div class="device-guide">
+        <div class="guide-step">
+          <div class="guide-num">①</div>
+          <span>T-Embed CC1101을 USB 케이블로 PC에 연결합니다.</span>
+        </div>
+        <div class="guide-step">
+          <div class="guide-num">②</div>
+          <span>
+            처음 플래시하거나 장치가 인식되지 않으면
+            <strong style="color:var(--text)">BOOT 버튼을 누른 채 USB를 연결</strong>하여
+            다운로드 모드로 진입합니다.
+          </span>
+        </div>
+        <div class="guide-step">
+          <div class="guide-num">③</div>
+          <span>아래 "Flash" 버튼을 클릭하고 브라우저의 포트 선택 팝업에서 장치를 선택합니다.</span>
+        </div>
+      </div>
+
+      <!-- SHA256 상태 -->
+      <div id="sha-status">
+        <span id="sha-icon">⏳</span>
+        <span id="sha-msg">SHA-256 체크섬 검증 중...</span>
+      </div>
+
+      <!-- 플래시 버튼 영역 -->
+      <div class="flash-controls">
+        <!-- 릴리즈 미선택 시 비활성 버튼 -->
+        <div id="flash-placeholder">
+          <button class="btn-flash-disabled" disabled>Flash Device</button>
+          <span style="font-size:.75rem;color:var(--text-muted)">먼저 위에서 릴리즈를 선택하세요</span>
+        </div>
+
+        <!-- 실제 esp-web-tools 버튼 (릴리즈 선택 후 표시) -->
+        <esp-web-install-button id="ewt-btn" style="display:none"></esp-web-install-button>
+
+        <!-- 브라우저 미지원 안내 -->
+        <div id="no-browser-support">
+          이 브라우저는 Web Serial API를 지원하지 않습니다.
+          Chrome 또는 Edge (데스크톱) 를 사용해 주세요.
+        </div>
+      </div>
+    </div>
+  </div>
+
+</main>
+
+<!-- ═══════════════════════ FOOTER ═══════════════════════ -->
+<footer>
+  <a href="https://github.com/HITEYY/ZX-OS" target="_blank" rel="noopener">HITEYY/ZX-OS</a>
+  &nbsp;·&nbsp;
+  ZX-OS Web Flusher
+  &nbsp;·&nbsp;
+  Powered by <a href="https://esphome.github.io/esp-web-tools/" target="_blank" rel="noopener">esp-web-tools</a>
+</footer>
+
+<!-- ═══════════════════════ SCRIPT ═══════════════════════ -->
+<script type="module">
+  // ── Constants ────────────────────────────────────────────────
+  const REPO       = 'HITEYY/ZX-OS';
+  const ENV        = 't-embed-cc1101';
+  const CHIP       = 'ESP32-S3';
+  const APP_OFFSET = 0x10000;          // standard Arduino ESP32-S3 app partition
+  const BIN_PREFIX = `openclaw-${ENV}`;
+
+  const API_RELEASES = `https://api.github.com/repos/${REPO}/releases`;
+  const GH_RELEASE   = (tag) => `https://github.com/${REPO}/releases/tag/${tag}`;
+
+  // ── State ─────────────────────────────────────────────────────
+  let selected        = null;  // { release, asset, sha256Asset }
+  let manifestBlobUrl = null;
+
+  // ── DOM refs ──────────────────────────────────────────────────
+  const releaseList   = document.getElementById('release-list');
+  const selectedInfo  = document.getElementById('selected-info');
+  const releaseNotes  = document.getElementById('release-notes');
+  const siVersion     = document.getElementById('si-version');
+  const siFilename    = document.getElementById('si-filename');
+  const siSize        = document.getElementById('si-size');
+  const siSha         = document.getElementById('si-sha');
+  const step1Badge    = document.getElementById('step1-badge');
+  const step2Badge    = document.getElementById('step2-badge');
+  const shaStatus     = document.getElementById('sha-status');
+  const shaIcon       = document.getElementById('sha-icon');
+  const shaMsg        = document.getElementById('sha-msg');
+  const placeholder   = document.getElementById('flash-placeholder');
+  const ewtBtn        = document.getElementById('ewt-btn');
+  const noBrowser     = document.getElementById('no-browser-support');
+  const compatBanner  = document.getElementById('compat-banner');
+
+  // ── Browser compatibility ─────────────────────────────────────
+  const hasWebSerial = 'serial' in navigator;
+  if (!hasWebSerial) {
+    compatBanner.style.display = 'flex';
+  }
+
+  // ── Utilities ─────────────────────────────────────────────────
+  function fmtBytes(b) {
+    if (b === null || b === undefined) return '—';
+    if (b >= 1048576) return (b / 1048576).toFixed(2) + ' MB';
+    if (b >= 1024)    return (b / 1024).toFixed(1) + ' KB';
+    return b + ' B';
+  }
+
+  function relativeDate(isoStr) {
+    const d    = new Date(isoStr);
+    const diff = (Date.now() - d.getTime()) / 1000;
+    if (diff < 60)     return '방금 전';
+    if (diff < 3600)   return Math.floor(diff / 60) + '분 전';
+    if (diff < 86400)  return Math.floor(diff / 3600) + '시간 전';
+    if (diff < 2592000) return Math.floor(diff / 86400) + '일 전';
+    return d.toLocaleDateString('ko-KR');
+  }
+
+  function findBinAsset(release) {
+    return release.assets.find(a =>
+      a.name.startsWith(BIN_PREFIX) &&
+      a.name.endsWith('.bin') &&
+      !a.name.endsWith('.sha256')
+    ) || null;
+  }
+
+  function findShaAsset(release) {
+    return release.assets.find(a =>
+      a.name.startsWith(BIN_PREFIX) &&
+      a.name.endsWith('.bin.sha256')
+    ) || null;
+  }
+
+  // ── Manifest generation for esp-web-tools ────────────────────
+  function buildManifest(release, binaryUrl) {
+    return {
+      name:    'ZX-OS',
+      version: release.tag_name,
+      builds:  [
+        {
+          chipFamily: CHIP,
+          parts: [
+            { path: binaryUrl, offset: APP_OFFSET }
+          ]
+        }
+      ]
+    };
+  }
+
+  function setManifest(release, binaryUrl) {
+    const manifest = buildManifest(release, binaryUrl);
+    const blob     = new Blob([JSON.stringify(manifest)], { type: 'application/json' });
+    if (manifestBlobUrl) URL.revokeObjectURL(manifestBlobUrl);
+    manifestBlobUrl     = URL.createObjectURL(blob);
+    ewtBtn.manifest     = manifestBlobUrl;
+  }
+
+  // ── SHA-256 verify ────────────────────────────────────────────
+  async function verifySha256(binaryUrl, shaUrl) {
+    shaStatus.className = 'checking';
+    shaIcon.textContent = '⏳';
+    shaMsg.textContent  = 'SHA-256 검증 중...';
+
+    try {
+      const [binResp, shaResp] = await Promise.all([
+        fetch(binaryUrl),
+        fetch(shaUrl),
+      ]);
+      if (!binResp.ok || !shaResp.ok) throw new Error('fetch failed');
+
+      const [buf, shaText] = await Promise.all([
+        binResp.arrayBuffer(),
+        shaResp.text(),
+      ]);
+
+      const expectedHex = shaText.trim().split(/\s+/)[0].toLowerCase();
+      const hashBuf     = await crypto.subtle.digest('SHA-256', buf);
+      const actualHex   = Array.from(new Uint8Array(hashBuf))
+        .map(b => b.toString(16).padStart(2, '0')).join('');
+
+      if (actualHex === expectedHex) {
+        shaStatus.className = 'ok';
+        shaIcon.textContent = '✔';
+        shaMsg.textContent  = `체크섬 일치: ${actualHex.slice(0, 16)}…`;
+        siSha.textContent   = actualHex;
+      } else {
+        shaStatus.className = 'fail';
+        shaIcon.textContent = '✗';
+        shaMsg.textContent  = '체크섬 불일치! 파일이 손상되었을 수 있습니다.';
+      }
+    } catch (err) {
+      shaStatus.className = 'fail';
+      shaIcon.textContent = '✗';
+      shaMsg.textContent  = `SHA-256 검증 실패: ${err.message}`;
+    }
+  }
+
+  // ── Release selection ─────────────────────────────────────────
+  async function selectRelease(release, itemEl) {
+    // deselect all
+    document.querySelectorAll('.release-item').forEach(el => el.classList.remove('selected'));
+    itemEl.classList.add('selected');
+
+    const asset    = findBinAsset(release);
+    const shaAsset = findShaAsset(release);
+    selected       = { release, asset, shaAsset };
+
+    // update detail table
+    siVersion.textContent  = release.tag_name;
+    siFilename.textContent = asset ? asset.name : '—';
+    siSize.textContent     = asset ? fmtBytes(asset.size) : '—';
+    siSha.textContent      = '검증 중...';
+
+    selectedInfo.classList.add('visible');
+
+    // release notes
+    const body = release.body?.trim();
+    if (body) {
+      releaseNotes.textContent = body;
+      releaseNotes.classList.add('visible');
+    } else {
+      releaseNotes.classList.remove('visible');
+    }
+
+    step1Badge.classList.add('done');
+    step1Badge.textContent = '✓';
+
+    if (!asset) return;
+
+    // Show flash button
+    placeholder.style.display = 'none';
+
+    if (!hasWebSerial) {
+      noBrowser.style.display = 'block';
+      ewtBtn.style.display    = 'none';
+    } else {
+      noBrowser.style.display = 'none';
+      ewtBtn.style.display    = 'block';
+      setManifest(release, asset.browser_download_url);
+    }
+
+    step2Badge.classList.remove('locked');
+    step2Badge.textContent  = '2';
+
+    // SHA-256 verification
+    if (shaAsset) {
+      await verifySha256(asset.browser_download_url, shaAsset.browser_download_url);
+    } else {
+      shaStatus.className = 'checking';
+      shaIcon.textContent = '—';
+      shaMsg.textContent  = 'SHA-256 파일이 이 릴리즈에 포함되어 있지 않습니다.';
+    }
+  }
+
+  // ── Render releases ───────────────────────────────────────────
+  function renderReleases(releases) {
+    releaseList.innerHTML = '';
+
+    if (!releases || releases.length === 0) {
+      releaseList.innerHTML = '<div class="error-box">릴리즈를 찾을 수 없습니다. GitHub 저장소에 릴리즈가 없을 수 있습니다.</div>';
+      return;
+    }
+
+    let isFirst = true;
+
+    releases.forEach((release, idx) => {
+      const asset    = findBinAsset(release);
+      const hasAsset = !!asset;
+
+      const item = document.createElement('div');
+      item.className = 'release-item' + (hasAsset ? '' : ' no-asset');
+
+      // Badges
+      const badges = [];
+      if (idx === 0 && !release.prerelease) badges.push('<span class="badge latest">Latest</span>');
+      if (release.prerelease) badges.push('<span class="badge pre">Pre-release</span>');
+      if (!hasAsset)          badges.push('<span class="badge no-bin">바이너리 없음</span>');
+
+      item.innerHTML = `
+        <div class="ri-radio"></div>
+        <div class="ri-info">
+          <div class="ri-tag">
+            ${escapeHtml(release.tag_name)}
+            ${badges.join('')}
+          </div>
+          <div class="ri-meta">
+            ${relativeDate(release.published_at)}
+            ${release.name && release.name !== release.tag_name ? ' · ' + escapeHtml(release.name) : ''}
+          </div>
+        </div>
+        ${hasAsset ? `<div class="ri-size">${fmtBytes(asset.size)}</div>` : ''}
+      `;
+
+      if (hasAsset) {
+        item.addEventListener('click', () => selectRelease(release, item));
+        // Auto-select first flashable release
+        if (isFirst) {
+          isFirst = false;
+          // slight delay for DOM paint
+          setTimeout(() => item.click(), 80);
+        }
+      }
+
+      releaseList.appendChild(item);
+    });
+  }
+
+  function escapeHtml(str) {
+    return String(str)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;');
+  }
+
+  // ── Fetch releases ────────────────────────────────────────────
+  async function loadReleases() {
+    try {
+      const resp = await fetch(API_RELEASES, {
+        headers: { 'Accept': 'application/vnd.github+json' }
+      });
+      if (!resp.ok) {
+        if (resp.status === 403) throw new Error('GitHub API 요청 한도 초과 (60 req/hr). 잠시 후 다시 시도해 주세요.');
+        throw new Error(`GitHub API 오류: ${resp.status}`);
+      }
+      const releases = await resp.json();
+      renderReleases(releases);
+    } catch (err) {
+      releaseList.innerHTML = `<div class="error-box">릴리즈 목록 로드 실패: ${escapeHtml(err.message)}</div>`;
+    }
+  }
+
+  // ── Init ──────────────────────────────────────────────────────
+  loadReleases();
+</script>
+
+</body>
+</html>
