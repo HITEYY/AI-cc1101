@@ -27,7 +27,6 @@ jobs:
           - t-embed-cc1101
           - t-deck
           - cardputer
-          - cyd-2432s028
           - esp32s3-generic
     steps:
       - name: Checkout repository
