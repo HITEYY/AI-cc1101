@@ -60,23 +60,6 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
-      - name: Copy latest bin for Pages
-        if: startsWith(github.ref, 'refs/tags/v')
-        run: |
-          mkdir -p pages-firmware
-          for f in dist/openclaw-*-latest.bin; do
-            [ -f "$f" ] && cp "$f" pages-firmware/
-          done
-
-      - name: Upload Pages firmware artifact
-        if: startsWith(github.ref, 'refs/tags/v')
-        uses: actions/upload-artifact@v4
-        with:
-          name: pages-firmware-${{ matrix.env }}
-          path: pages-firmware/*
-          if-no-files-found: ignore
-          retention-days: 14
-
 
   release:
     if: startsWith(github.ref, 'refs/tags/v')
@@ -84,6 +67,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      actions: write
     steps:
       - name: Download all build artifacts
         uses: actions/download-artifact@v4
@@ -135,3 +119,8 @@ jobs:
           files: |
             dist/*
           fail_on_unmatched_files: false
+
+      - name: Trigger Pages deploy with firmware
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run pages.yml -r main
