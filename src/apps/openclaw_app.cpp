@@ -580,10 +580,15 @@ bool encodeBase64(const uint8_t *data,
 }
 
 bool ensureSdMountedForVoice(String *error = nullptr) {
+#if HAL_HAS_DISPLAY
   pinMode(boardpins::kTftCs, OUTPUT);
   digitalWrite(boardpins::kTftCs, HIGH);
+#endif
+#if HAL_HAS_CC1101
   pinMode(boardpins::kCc1101Cs, OUTPUT);
   digitalWrite(boardpins::kCc1101Cs, HIGH);
+#endif
+#if HAL_HAS_SD_CARD
   pinMode(boardpins::kSdCs, OUTPUT);
   digitalWrite(boardpins::kSdCs, HIGH);
 
@@ -598,6 +603,12 @@ bool ensureSdMountedForVoice(String *error = nullptr) {
     *error = "SD mount failed";
   }
   return mounted;
+#else
+  if (error) {
+    *error = "SD card not available on this board";
+  }
+  return false;
+#endif
 }
 
 bool listSdDirectory(const String &path,

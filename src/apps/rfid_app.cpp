@@ -55,12 +55,18 @@ bool ensureRfidReady(String *errorOut) {
     return false;
   }
 
+#if HAL_HAS_DISPLAY
   pinMode(boardpins::kTftCs, OUTPUT);
   digitalWrite(boardpins::kTftCs, HIGH);
+#endif
+#if HAL_HAS_SD_CARD
   pinMode(boardpins::kSdCs, OUTPUT);
   digitalWrite(boardpins::kSdCs, HIGH);
+#endif
+#if HAL_HAS_CC1101
   pinMode(boardpins::kCc1101Cs, OUTPUT);
   digitalWrite(boardpins::kCc1101Cs, HIGH);
+#endif
 
   pinMode(USER_RFID_SS_PIN, OUTPUT);
   digitalWrite(USER_RFID_SS_PIN, HIGH);
