@@ -470,8 +470,8 @@
     </div>
   </div>
 
-  <!-- ─── STEP 2: 릴리즈 선택 ─── -->
-  <div class="card">
+  <!-- ─── STEP 2: 릴리즈 (자동 설정 - 숨김) ─── -->
+  <div class="card" style="display:none" id="release-card">
     <div class="card-header">
       <div class="step-badge" id="step1-badge">2</div>
       <h2>릴리즈 선택</h2>
@@ -606,9 +606,10 @@
     BIN_PREFIX   = `openclaw-${currentBoard}`;
     document.getElementById('step0-badge').classList.add('done');
     document.getElementById('step0-badge').textContent = '✓';
-    // Re-render releases for the new board
+    // Re-render releases for the new board and auto-select latest
     if (cachedReleases) {
       renderReleases(cachedReleases);
+      // Auto-selection happens inside renderReleases
     }
   };
 
@@ -799,7 +800,8 @@
       return;
     }
 
-    let isFirst = true;
+    let firstFlashableRelease = null;
+    let firstFlashableItem = null;
 
     releases.forEach((release, idx) => {
       const asset    = findBinAsset(release);
@@ -831,16 +833,20 @@
 
       if (hasAsset) {
         item.addEventListener('click', () => selectRelease(release, item));
-        // Auto-select first flashable release
-        if (isFirst) {
-          isFirst = false;
-          // slight delay for DOM paint
-          setTimeout(() => item.click(), 80);
+        // Track first flashable release for auto-selection
+        if (!firstFlashableRelease) {
+          firstFlashableRelease = release;
+          firstFlashableItem = item;
         }
       }
 
       releaseList.appendChild(item);
     });
+
+    // Auto-select first flashable release (latest version)
+    if (firstFlashableRelease && firstFlashableItem) {
+      setTimeout(() => firstFlashableItem.click(), 100);
+    }
   }
 
   function escapeHtml(str) {
