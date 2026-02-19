@@ -688,17 +688,31 @@
   }
 
   // ── SHA-256 verify ────────────────────────────────────────────
-  async function verifySha256(binaryUrl, shaUrl) {
+  // GitHub release asset URLs don't support CORS from browsers.
+  // Use the GitHub API endpoint with Accept: application/octet-stream
+  // which returns a CORS-enabled redirect.
+  function assetApiUrl(asset) {
+    return `https://api.github.com/repos/${REPO}/releases/assets/${asset.id}`;
+  }
+
+  async function fetchAssetBytes(asset) {
+    const resp = await fetch(assetApiUrl(asset), {
+      headers: { 'Accept': 'application/octet-stream' }
+    });
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    return resp;
+  }
+
+  async function verifySha256(binAsset, shaAsset) {
     shaStatus.className = 'checking';
     shaIcon.textContent = '⏳';
     shaMsg.textContent  = 'SHA-256 검증 중...';
 
     try {
       const [binResp, shaResp] = await Promise.all([
-        fetch(binaryUrl),
-        fetch(shaUrl),
+        fetchAssetBytes(binAsset),
+        fetchAssetBytes(shaAsset),
       ]);
-      if (!binResp.ok || !shaResp.ok) throw new Error('fetch failed');
 
       const [buf, shaText] = await Promise.all([
         binResp.arrayBuffer(),
@@ -776,7 +790,7 @@
 
     // SHA-256 verification
     if (shaAsset) {
-      await verifySha256(asset.browser_download_url, shaAsset.browser_download_url);
+      await verifySha256(asset, shaAsset);
     } else {
       shaStatus.className = 'checking';
       shaIcon.textContent = '—';
