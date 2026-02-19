@@ -12,20 +12,31 @@ namespace boardpins {
 constexpr uint8_t kPowerEnable = HAL_PIN_POWER_ENABLE;
 #endif
 
-// Display
-#if HAL_HAS_DISPLAY
+// Display – always expose the pin (may be -1 on headless boards) so that
+// shared-SPI deselect code compiles unconditionally.
+#ifdef HAL_PIN_TFT_CS
 constexpr int8_t kTftCs = HAL_PIN_TFT_CS;
+#else
+constexpr int8_t kTftCs = -1;
+#endif
+#ifdef HAL_PIN_TFT_BACKLIGHT
 constexpr int8_t kTftBacklight = HAL_PIN_TFT_BACKLIGHT;
+#else
+constexpr int8_t kTftBacklight = -1;
 #endif
 
 // SD Card
-#if HAL_HAS_SD_CARD
+#ifdef HAL_PIN_SD_CS
 constexpr int8_t kSdCs = HAL_PIN_SD_CS;
+#else
+constexpr int8_t kSdCs = -1;
 #endif
 
 // CC1101 Radio
-#if HAL_HAS_CC1101
+#ifdef HAL_PIN_CC1101_CS
 constexpr int8_t kCc1101Cs = HAL_PIN_CC1101_CS;
+#else
+constexpr int8_t kCc1101Cs = -1;
 #endif
 
 // Shared SPI bus
@@ -49,7 +60,9 @@ constexpr uint8_t kBtnOk = static_cast<uint8_t>(HAL_PIN_BTN_OK);
 constexpr uint8_t kBtnBack = static_cast<uint8_t>(HAL_PIN_BTN_BACK);
 #endif
 
-// Legacy aliases for existing code that references kEncoderOk / kEncoderBack
+// Legacy aliases for existing code that references kEncoderOk / kEncoderBack.
+// Always defined so call-sites compile; value is 0 (harmless) when no button
+// exists – callers should guard behaviour with HAL_HAS_ENCODER / HAL_HAS_BUTTONS.
 #if HAL_HAS_ENCODER
 constexpr uint8_t kEncoderOk = static_cast<uint8_t>(USER_ENCODER_OK_PIN);
 constexpr uint8_t kEncoderBack = static_cast<uint8_t>(USER_ENCODER_BACK_PIN);
@@ -60,6 +73,9 @@ constexpr uint8_t kEncoderBack = static_cast<uint8_t>(HAL_PIN_BTN_BACK);
 #else
 constexpr uint8_t kEncoderBack = static_cast<uint8_t>(HAL_PIN_BTN_OK);
 #endif
+#else
+constexpr uint8_t kEncoderOk = 0;
+constexpr uint8_t kEncoderBack = 0;
 #endif
 
 // I2C

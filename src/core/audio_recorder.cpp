@@ -408,8 +408,10 @@ bool capturePdmSamples(File &file,
     i2s_stop(I2S_NUM_0);
     uninstallI2sIfNeeded();
     // Keep UI button pins in pull-up input mode after I2S teardown.
+#if HAL_HAS_ENCODER || (defined(HAL_PIN_BTN_OK) && HAL_PIN_BTN_OK >= 0)
     pinMode(boardpins::kEncoderOk, INPUT_PULLUP);
     pinMode(boardpins::kEncoderBack, INPUT_PULLUP);
+#endif
   };
   struct PdmRoute {
     bool duplicateClkToBck = false;

@@ -277,13 +277,23 @@ void applyEnvGatewayOverrides(RuntimeConfig &config,
 }
 
 bool mountSd(String *reason) {
-  pinMode(boardpins::kTftCs, OUTPUT);
-  digitalWrite(boardpins::kTftCs, HIGH);
-  pinMode(boardpins::kCc1101Cs, OUTPUT);
-  digitalWrite(boardpins::kCc1101Cs, HIGH);
-  pinMode(boardpins::kSdCs, OUTPUT);
-  digitalWrite(boardpins::kSdCs, HIGH);
+  if (boardpins::kTftCs >= 0) {
+    pinMode(boardpins::kTftCs, OUTPUT);
+    digitalWrite(boardpins::kTftCs, HIGH);
+  }
+  if (boardpins::kCc1101Cs >= 0) {
+    pinMode(boardpins::kCc1101Cs, OUTPUT);
+    digitalWrite(boardpins::kCc1101Cs, HIGH);
+  }
+  if (boardpins::kSdCs >= 0) {
+    pinMode(boardpins::kSdCs, OUTPUT);
+    digitalWrite(boardpins::kSdCs, HIGH);
+  }
 
+#if !HAL_HAS_SD_CARD
+  if (reason) *reason = "No SD card support on this board";
+  return false;
+#else
   SPIClass *spiBus = sharedspi::bus();
   const bool mounted = SD.begin(boardpins::kSdCs,
                                 *spiBus,
@@ -295,6 +305,7 @@ bool mountSd(String *reason) {
     *reason = "SD mount failed";
   }
   return mounted;
+#endif  // HAL_HAS_SD_CARD
 }
 
 bool parseConfigBlob(const String &blob,
