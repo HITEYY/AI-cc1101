@@ -26,13 +26,18 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: Prepare Pages site
+        run: |
+          cp -r web-flusher _site
+          mkdir -p _site/firmware
+
       - name: Configure GitHub Pages
         uses: actions/configure-pages@v5
 
-      - name: Upload web-flusher as Pages artifact
+      - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3
         with:
-          path: web-flusher
+          path: _site
 
       - name: Deploy to GitHub Pages
         id: deployment

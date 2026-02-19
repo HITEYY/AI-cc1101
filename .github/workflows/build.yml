@@ -12,6 +12,8 @@ on:
 
 permissions:
   contents: read
+  pages: write
+  id-token: write
 
 concurrency:
   group: build-${{ github.workflow }}-${{ github.ref }}
@@ -58,6 +60,23 @@ jobs:
           name: build-${{ matrix.env }}
           path: dist/*
           if-no-files-found: error
+          retention-days: 14
+
+      - name: Copy latest bin for Pages
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          mkdir -p pages-firmware
+          for f in dist/openclaw-*-latest.bin; do
+            [ -f "$f" ] && cp "$f" pages-firmware/
+          done
+
+      - name: Upload Pages firmware artifact
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: actions/upload-artifact@v4
+        with:
+          name: pages-firmware-${{ matrix.env }}
+          path: pages-firmware/*
+          if-no-files-found: ignore
           retention-days: 14
 
 
@@ -118,3 +137,41 @@ jobs:
           files: |
             dist/*
           fail_on_unmatched_files: false
+
+  deploy-pages:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download firmware artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: pages-firmware-*
+          path: firmware-artifacts
+
+      - name: Prepare Pages site
+        run: |
+          cp -r web-flusher _site
+          mkdir -p _site/firmware
+          for d in firmware-artifacts/pages-firmware-*/; do
+            cp "$d"*.bin _site/firmware/ 2>/dev/null || true
+          done
+          ls -la _site/firmware/ || echo "No firmware files"
+
+      - name: Configure GitHub Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

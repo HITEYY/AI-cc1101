@@ -579,6 +579,7 @@
 
   const API_RELEASES = `https://api.github.com/repos/${REPO}/releases`;
   const GH_RELEASE   = (tag) => `https://github.com/${REPO}/releases/tag/${tag}`;
+  const PAGES_BASE   = `https://hiteyy.github.io/ZX-OS`;
 
   // ── Board state ────────────────────────────────────────────────
   let currentBoard = 't-embed-cc1101';
@@ -765,7 +766,9 @@
     } else {
       noBrowser.style.display = 'none';
       ewtBtn.style.display    = 'block';
-      setManifest(release, asset.browser_download_url);
+      // Use Pages-hosted firmware (CORS-safe) with release URL as fallback
+      const pagesFwUrl = `${PAGES_BASE}/firmware/openclaw-${currentBoard}-latest.bin`;
+      setManifest(release, pagesFwUrl);
     }
 
     step2Badge.classList.remove('locked');
