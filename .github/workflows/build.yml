@@ -81,6 +81,31 @@ jobs:
           done
           ls -la dist/
 
+      - name: Generate SHA-256 body
+        id: sha256body
+        run: |
+          body=""
+          for f in dist/openclaw-*.bin; do
+            [ -f "$f" ] || continue
+            name="$(basename "$f")"
+            hash="$(sha256sum "$f" | awk '{print $1}')"
+            body="${body}<!-- SHA256:${name}=${hash} -->"$'\n'
+          done
+          # Also add human-readable table
+          body="${body}"$'\n'"### SHA-256 Checksums"$'\n'
+          body="${body}| File | SHA-256 |"$'\n'
+          body="${body}|------|---------|"$'\n'
+          for f in dist/openclaw-*.bin; do
+            [ -f "$f" ] || continue
+            name="$(basename "$f")"
+            hash="$(sha256sum "$f" | awk '{print $1}')"
+            body="${body}| \`${name}\` | \`${hash}\` |"$'\n'
+          done
+          EOF=$(dd if=/dev/urandom bs=15 count=1 status=none | base64)
+          echo "body<<$EOF" >> "$GITHUB_OUTPUT"
+          echo "$body" >> "$GITHUB_OUTPUT"
+          echo "$EOF" >> "$GITHUB_OUTPUT"
+
       - name: Create GitHub release
         uses: softprops/action-gh-release@v2
         with:
@@ -88,6 +113,8 @@ jobs:
           target_commitish: ${{ github.sha }}
           name: ${{ github.ref_name }}
           generate_release_notes: true
+          body: ${{ steps.sha256body.outputs.body }}
+          append_body: true
           files: |
             dist/*
           fail_on_unmatched_files: false

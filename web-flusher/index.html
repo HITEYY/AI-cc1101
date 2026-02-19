@@ -687,57 +687,40 @@
     ewtBtn.manifest     = manifestBlobUrl;
   }
 
-  // ── SHA-256 verify ────────────────────────────────────────────
-  // GitHub release asset URLs don't support CORS from browsers.
-  // Use the GitHub API endpoint with Accept: application/octet-stream
-  // which returns a CORS-enabled redirect.
-  function assetApiUrl(asset) {
-    return `https://api.github.com/repos/${REPO}/releases/assets/${asset.id}`;
+  // ── SHA-256 display ────────────────────────────────────────────
+  // GitHub release asset downloads don't support CORS, so we cannot
+  // fetch binaries or .sha256 files from the browser.  Instead, the CI
+  // workflow appends a SHA-256 table to the release body. We parse it
+  // from the already-loaded release object (no extra fetch needed).
+  //
+  // Expected format in release body:
+  //   <!-- SHA256:openclaw-t-embed-cc1101-v0.2.1.bin=abc123... -->
+  function extractSha256(release, binName) {
+    const body = release.body || '';
+    // Match: <!-- SHA256:<filename>=<hash> -->
+    const re = new RegExp(`<!-- SHA256:${escapeRegExp(binName)}=([0-9a-fA-F]{64}) -->`);
+    const m  = body.match(re);
+    return m ? m[1].toLowerCase() : null;
   }
 
-  async function fetchAssetBytes(asset) {
-    const resp = await fetch(assetApiUrl(asset), {
-      headers: { 'Accept': 'application/octet-stream' }
-    });
-    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-    return resp;
+  function escapeRegExp(s) {
+    return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   }
 
-  async function verifySha256(binAsset, shaAsset) {
-    shaStatus.className = 'checking';
-    shaIcon.textContent = '⏳';
-    shaMsg.textContent  = 'SHA-256 검증 중...';
+  function displaySha256(release, asset) {
+    if (!asset) return;
 
-    try {
-      const [binResp, shaResp] = await Promise.all([
-        fetchAssetBytes(binAsset),
-        fetchAssetBytes(shaAsset),
-      ]);
-
-      const [buf, shaText] = await Promise.all([
-        binResp.arrayBuffer(),
-        shaResp.text(),
-      ]);
-
-      const expectedHex = shaText.trim().split(/\s+/)[0].toLowerCase();
-      const hashBuf     = await crypto.subtle.digest('SHA-256', buf);
-      const actualHex   = Array.from(new Uint8Array(hashBuf))
-        .map(b => b.toString(16).padStart(2, '0')).join('');
-
-      if (actualHex === expectedHex) {
-        shaStatus.className = 'ok';
-        shaIcon.textContent = '✔';
-        shaMsg.textContent  = `체크섬 일치: ${actualHex.slice(0, 16)}…`;
-        siSha.textContent   = actualHex;
-      } else {
-        shaStatus.className = 'fail';
-        shaIcon.textContent = '✗';
-        shaMsg.textContent  = '체크섬 불일치! 파일이 손상되었을 수 있습니다.';
-      }
-    } catch (err) {
-      shaStatus.className = 'fail';
-      shaIcon.textContent = '✗';
-      shaMsg.textContent  = `SHA-256 검증 실패: ${err.message}`;
+    const sha256 = extractSha256(release, asset.name);
+    if (sha256) {
+      shaStatus.className = 'ok';
+      shaIcon.textContent = '✔';
+      shaMsg.textContent  = `SHA-256: ${sha256.slice(0, 16)}…`;
+      siSha.textContent   = sha256;
+    } else {
+      shaStatus.className = 'checking';
+      shaIcon.textContent = '—';
+      shaMsg.textContent  = 'SHA-256 정보가 이 릴리즈에 포함되어 있지 않습니다.';
+      siSha.textContent   = '—';
     }
   }
 
@@ -788,14 +771,8 @@
     step2Badge.classList.remove('locked');
     step2Badge.textContent  = '2';
 
-    // SHA-256 verification
-    if (shaAsset) {
-      await verifySha256(asset, shaAsset);
-    } else {
-      shaStatus.className = 'checking';
-      shaIcon.textContent = '—';
-      shaMsg.textContent  = 'SHA-256 파일이 이 릴리즈에 포함되어 있지 않습니다.';
-    }
+    // SHA-256 display (parsed from release body)
+    displaySha256(release, asset);
   }
 
   // ── Render releases ───────────────────────────────────────────
